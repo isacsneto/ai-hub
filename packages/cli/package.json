@@ -1,0 +1,13 @@
+{
+  "name": "@aihub/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "aihub": "./dist/index.js"
+  },
+  "dependencies": {
+    "@aihub/core": "*",
+    "commander": "^14.0.3"
+  }
+}

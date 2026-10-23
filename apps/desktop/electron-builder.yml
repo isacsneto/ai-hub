@@ -1,0 +1,23 @@
+appId: com.isacsneto.aihub
+productName: AI-Hub
+copyright: Copyright © 2026 AI-Hub contributors
+directories:
+  output: release
+  buildResources: build
+files:
+  - out/**/*
+  - package.json
+# sharp loads a native library; it can't run from inside the asar archive.
+asarUnpack:
+  - "**/node_modules/sharp/**/*"
+  - "**/node_modules/@img/**/*"
+npmRebuild: false
+mac:
+  target: [dir]
+  category: public.app-category.developer-tools
+  icon: build/icon.png
+  # No Apple Developer ID: scripts/package-mac.sh signs ad hoc after packaging.
+  identity: null
+  hardenedRuntime: false
+  extendInfo:
+    LSMinimumSystemVersion: "13.0"

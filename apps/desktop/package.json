@@ -1,0 +1,39 @@
+{
+  "name": "@aihub/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "package": "bash scripts/package-mac.sh",
+    "icon": "node scripts/make-icon.mjs"
+  },
+  "dependencies": {
+    "sharp": "0.35.5"
+  },
+  "devDependencies": {
+    "@aihub/core": "*",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "45.0.0",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^4.0.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tailwindcss": "^4.3.3",
+    "vite": "^7.3.7"
+  },
+  "productName": "AI-Hub",
+  "description": "Run several AI accounts side by side, isolated, sharing only what you choose.",
+  "author": "AI-Hub contributors",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/isacsneto/ai-hub.git"
+  }
+}

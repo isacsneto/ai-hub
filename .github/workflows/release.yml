@@ -1,0 +1,36 @@
+name: Release
+
+# Push a tag like v0.2.0 (scripts/release.sh does it) to build the app and publish a GitHub
+# release. Installed copies of AI-Hub find it within six hours, or at once via "Check for updates".
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15 # Apple Silicon
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Tag must match the app version
+        run: |
+          version=$(node -p "require('./apps/desktop/package.json').version")
+          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "Tag $GITHUB_REF_NAME does not match app version v$version"; exit 1; }
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npm test
+      - run: bash apps/desktop/scripts/package-mac.sh
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            apps/desktop/release/AI-Hub-*-mac.zip apps/desktop/release/SHA256SUMS.txt \
+            --title "AI-Hub ${GITHUB_REF_NAME#v}" --generate-notes

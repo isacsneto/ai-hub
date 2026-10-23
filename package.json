@@ -1,0 +1,31 @@
+{
+  "name": "ai-hub",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/core",
+    "packages/cli",
+    "apps/desktop"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc -b packages/cli",
+    "test": "vitest run",
+    "typecheck": "tsc -b packages/cli && tsc -p packages/core/tsconfig.test.json && tsc --noEmit -p apps/desktop/tsconfig.json",
+    "aihub": "tsc -b packages/cli && node packages/cli/dist/index.js",
+    "desktop": "npm run build && npm run -w @aihub/desktop build && npm run -w @aihub/desktop start",
+    "package": "npm run build && npm run -w @aihub/desktop package"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "~5.9",
+    "vitest": "^5.0.5"
+  },
+  "version": "0.1.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/isacsneto/ai-hub.git"
+  }
+}

@@ -1,0 +1,9 @@
+node_modules/
+dist/
+*.tsbuildinfo
+coverage/
+.DS_Store
+# Phase 0 results can contain account emails — keep them local
+phase0-results-*.txt
+apps/desktop/out/
+apps/desktop/release/
