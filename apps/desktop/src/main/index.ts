@@ -253,6 +253,7 @@ const api = {
         current,
         execPath: process.execPath,
         bundleId,
+        relaunch: process.env.AIHUB_UPDATE_NO_RELAUNCH !== '1',
         onProgress: (received, total) => setUpdateStatus({ state: 'downloading', current, latest, received, total }),
         quit: () => {
           setUpdateStatus({ state: 'installing', current, latest });

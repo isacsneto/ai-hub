@@ -127,6 +127,8 @@ export async function downloadAndInstall(opts: {
   bundleId: string;
   onProgress: (received: number, total: number) => void;
   quit: () => void;
+  /** Reopen the app after swapping (default true; tests turn it off). */
+  relaunch?: boolean;
 }): Promise<void> {
   const target = installTarget(opts.execPath);
   if ('problem' in target) throw new Error(target.problem);
@@ -173,7 +175,7 @@ export async function downloadAndInstall(opts: {
       `if mv ${q(target.app)} ${q(backup)}; then`,
       `  mv ${q(next)} ${q(target.app)} || mv ${q(backup)} ${q(target.app)}`,
       'fi',
-      `open ${q(target.app)}`,
+      opts.relaunch === false ? '' : `open ${q(target.app)}`,
       `rm -rf ${q(work)}`,
       '',
     ].join('\n'),
