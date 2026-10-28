@@ -14,6 +14,8 @@ export interface InstallRecord {
   path: string;
   /** Library content hash at install time (copies, blocks) or hash of the value we wrote (settings). */
   hash?: string;
+  /** Instructions: hash of the whole managed block as the hub wrote it, to notice edits made inside it. */
+  blockHash?: string;
   installedAt: string;
 }
 

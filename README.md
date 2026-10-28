@@ -77,8 +77,8 @@ How each item gets into a profile:
 | settings | approved keys in `settings.json` | not supported |
 
 Safety rules:
-- **It only removes what it put there.** The hub records every item it places in `~/.aihub/state/` and never touches anything without such a record. A copy you edited is left alone unless you pass `--force`.
-- **Every change can be undone.** Changes happen in one transaction: replaced or removed things are moved into `~/.aihub/journal/`, a failed run rolls back, and `aihub undo` reverses the last run. The journal is written as changes happen, so a run cut short can be undone too. Undo leaves alone any file you edited after the hub wrote it, and says so.
+- **It only removes what it put there.** The hub records every item it places in `~/.aihub/state/` and never touches anything without such a record. A copy you edited, or text you changed inside the hub's block in `CLAUDE.md`/`AGENTS.md`, is left alone unless you pass `--force`.
+- **Every change can be undone.** Changes happen in one transaction: replaced or removed things are moved into `~/.aihub/journal/`, a failed run rolls back, and `aihub undo` reverses the last run. The journal is written as changes happen, so a run cut short can be undone too. Undo leaves alone any file you edited after the hub wrote it, and says so. If something can't be put back (a permissions problem, say), it stays in the journal and the next `aihub undo` retries it; `aihub undo --skip` gives up on it.
 - **Linked files stay linked.** If `CLAUDE.md` or `settings.json` is a symlink (into dotfiles, say), the hub won't replace it with a file; it reports a conflict instead. A managed block with damaged markers is also left for you to fix.
 - **One change at a time.** The app and the CLI share a lock in `~/.aihub`, so two changes never interleave.
 - **Plugins that bring MCP servers wait for approval.** The hub reads the plugin's marketplace files on disk; nothing is downloaded. Plugins with MCP servers, or with files it can't read offline, need `--allow-mcp` for each profile.

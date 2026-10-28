@@ -162,7 +162,7 @@ describe('whole-folder links (cpm)', () => {
     expect(await fs.readdir(`${home}/other/skills`)).toEqual(['theirs']);
 
     const undone = await undoLast(ctx);
-    expect(undone?.problems).toEqual([]);
+    expect(undone).toMatchObject({ failed: [], kept: [] });
     expect(await fs.readlink(`${home}/cw/skills`)).toBe(`${home}/other/skills`);
   });
 });

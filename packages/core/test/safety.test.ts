@@ -6,12 +6,12 @@ import { restoreHub } from '../src/backup.js';
 import { saveHub, type Hub, type Profile } from '../src/config.js';
 import { createContext, realSystem } from '../src/context.js';
 import { GUARD_PLIST } from '../src/discover.js';
-import { addToLibrary, setSharedSetting } from '../src/library.js';
+import { addToLibrary, itemPath, setSharedSetting } from '../src/library.js';
 import { blockProblem, reconcile, replaceBlock } from '../src/share.js';
 import { setSharing } from '../src/sharing-config.js';
 import { loadState } from '../src/state.js';
 import { takeover, undoTakeover } from '../src/takeover.js';
-import { undoLast } from '../src/tx.js';
+import { abandonUnfinishedUndo, undoLast } from '../src/tx.js';
 import { ctxFor, fakeSystem, tempHome, write } from './helpers.js';
 
 /** Regression tests for the code review: each one used to lose or overwrite something. */
@@ -48,7 +48,8 @@ describe('undo never loses edits', () => {
     await fs.appendFile(`${home}/cw/CLAUDE.md`, '\nMy own notes\n');
     const r = await undoLast(ctx);
     expect(await fs.readFile(`${home}/cw/CLAUDE.md`, 'utf8')).toContain('My own notes');
-    expect(r?.problems.join()).toMatch(/edited since/);
+    expect(r?.kept.join()).toMatch(/edited since/);
+    expect(r?.failed).toEqual([]);
   });
 
   it('leaves an edited Codex copy alone, but still removes an untouched one', async () => {
@@ -63,6 +64,93 @@ describe('undo never loses edits', () => {
     await reconcile(ctx, hub, cx);
     await undoLast(ctx);
     await expect(fs.access(`${home}/cx/prompts/deploy.md`)).rejects.toThrow();
+  });
+});
+
+describe('undo that stops partway', () => {
+  it('keeps what it could not reverse and retries it next time', async () => {
+    const { home, ctx, hub, cw } = await setup();
+    await setSharing(ctx, hub, 'skills', 'other', ['cw'], true);
+    await reconcile(ctx, hub, cw); // the earlier run
+    await setSharing(ctx, hub, 'skills', 'review', ['cw'], true);
+    await reconcile(ctx, hub, cw);
+
+    await fs.chmod(`${home}/cw/skills`, 0o500); // the link to review can't be removed now
+    try {
+      const first = await undoLast(ctx);
+      expect(first?.failed.join()).toMatch(/symlink .*review/);
+      expect(first?.resumed).toBe(false);
+    } finally {
+      await fs.chmod(`${home}/cw/skills`, 0o755);
+    }
+    expect((await fs.lstat(`${home}/cw/skills/review`)).isSymbolicLink()).toBe(true);
+
+    // The retry finishes the same run instead of going back to the earlier one.
+    const second = await undoLast(ctx);
+    expect(second).toMatchObject({ resumed: true, failed: [], reverted: 1 });
+    await expect(fs.lstat(`${home}/cw/skills/review`)).rejects.toThrow();
+    expect((await fs.lstat(`${home}/cw/skills/other`)).isSymbolicLink()).toBe(true);
+  });
+
+  it('can give up on the rest and go on to the run before', async () => {
+    const { home, ctx, hub, cw } = await setup();
+    await setSharing(ctx, hub, 'skills', 'other', ['cw'], true);
+    await reconcile(ctx, hub, cw);
+    await setSharing(ctx, hub, 'skills', 'review', ['cw'], true);
+    await reconcile(ctx, hub, cw);
+    expect(await abandonUnfinishedUndo(ctx)).toBeUndefined(); // nothing stopped partway yet
+
+    await fs.chmod(`${home}/cw/skills`, 0o500);
+    try {
+      await undoLast(ctx);
+    } finally {
+      await fs.chmod(`${home}/cw/skills`, 0o755);
+    }
+    expect(await abandonUnfinishedUndo(ctx)).toMatchObject({ left: 1 });
+    const next = await undoLast(ctx);
+    expect(next?.resumed).toBe(false);
+    await expect(fs.lstat(`${home}/cw/skills/other`)).rejects.toThrow();
+    expect((await fs.lstat(`${home}/cw/skills/review`)).isSymbolicLink()).toBe(true); // left as it was
+  });
+});
+
+describe('managed blocks edited by hand', () => {
+  it('leaves an AGENTS.md block edited in place alone unless forced', async () => {
+    const { home, ctx, hub, cx } = await setup();
+    await setSharing(ctx, hub, 'instructions', 'style', ['cx'], true);
+    await reconcile(ctx, hub, cx);
+    const agents = `${home}/cx/AGENTS.md`;
+    const edited = (await fs.readFile(agents, 'utf8')).replace('Use tabs.', 'Use tabs, except in YAML.');
+    await fs.writeFile(agents, edited);
+
+    // A library change would rewrite the block; the hand edit makes that a conflict.
+    await write(itemPath(ctx, 'instructions', 'style'), '# Coding style\nUse tabs.\nWrap at 100.\n');
+    const plan = await reconcile(ctx, hub, cx);
+    expect(plan.actions.find((a) => a.kind === 'instructions')).toMatchObject({ status: 'conflict' });
+    expect(await fs.readFile(agents, 'utf8')).toBe(edited);
+    // Unsharing would drop the block, which is just as much a loss.
+    await setSharing(ctx, hub, 'instructions', 'style', ['cx'], false);
+    expect((await reconcile(ctx, hub, cx, { dryRun: true })).actions.find((a) => a.kind === 'instructions')?.status).toBe('conflict');
+    await setSharing(ctx, hub, 'instructions', 'style', ['cx'], true);
+
+    const forced = await reconcile(ctx, hub, cx, { force: true });
+    expect(forced.actions.find((a) => a.kind === 'instructions')).toMatchObject({ status: 'done' });
+    const now = await fs.readFile(agents, 'utf8');
+    expect(now).toContain('Wrap at 100.');
+    expect(now).not.toContain('except in YAML');
+  });
+
+  it('still rewrites a block nobody touched, and text outside the block never counts as an edit', async () => {
+    const { home, ctx, hub, cx } = await setup();
+    await setSharing(ctx, hub, 'instructions', 'style', ['cx'], true);
+    await reconcile(ctx, hub, cx);
+    await fs.appendFile(`${home}/cx/AGENTS.md`, '\nMy own notes\n');
+    await write(itemPath(ctx, 'instructions', 'style'), '# Coding style\nUse spaces.\n');
+    const plan = await reconcile(ctx, hub, cx);
+    expect(plan.actions.find((a) => a.kind === 'instructions')).toMatchObject({ status: 'done' });
+    const text = await fs.readFile(`${home}/cx/AGENTS.md`, 'utf8');
+    expect(text).toContain('Use spaces.');
+    expect(text).toContain('My own notes');
   });
 });
 

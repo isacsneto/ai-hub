@@ -12,7 +12,7 @@ export * from './share.js';
 export * from './sharing-config.js';
 export * from './state.js';
 export * from './takeover.js';
-export { undoLast, journalRoot } from './tx.js';
+export { abandonUnfinishedUndo, undoLast, journalRoot, type UndoResult } from './tx.js';
 export { withHubLock } from './lock.js';
 export * from './icons.js';
 export * from './launchers.js';

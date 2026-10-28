@@ -106,6 +106,14 @@ export function replaceBlock(text: string, body: string | undefined): string {
   return text.trim() ? `${text.replace(/\n*$/, '\n\n')}${block}` : block;
 }
 
+/** The managed block (markers included) as it is in the file, if there is one. */
+function blockText(text: string): string | undefined {
+  const start = text.indexOf(BEGIN);
+  const end = start === -1 ? -1 : text.indexOf(END, start);
+  return end === -1 ? undefined : text.slice(start, end + END.length);
+}
+
+const textHash = (s: string) => createHash('sha256').update(s).digest('hex');
 const valueHash = (v: unknown) => createHash('sha256').update(JSON.stringify(v ?? null)).digest('hex');
 const now = () => new Date().toISOString();
 
@@ -190,7 +198,8 @@ async function reconcileUnlocked(ctx: Context, hub: Hub, p: Profile, opts: Recon
     if (r.kind === 'instructions' && !blocks.has(r.path)) blocks.set(r.path, { style: 'import', items: [] });
   }
   for (const [file, { style, items }] of blocks) {
-    steps.push(insideProfile(ctx, p, file) ? await planBlock(file, style, items) : { type: 'forget', kind: 'instructions', name: '(block)', path: file, status: 'pending', reason: 'recorded outside the profile; left alone', replaceRecords: { kind: 'instructions', file, records: [] }, run: async () => {} });
+    const prior = state.installs.filter((r) => r.kind === 'instructions' && r.path === file);
+    steps.push(insideProfile(ctx, p, file) ? await planBlock(file, style, items, prior, opts) : { type: 'forget', kind: 'instructions', name: '(block)', path: file, status: 'pending', reason: 'recorded outside the profile; left alone', replaceRecords: { kind: 'instructions', file, records: [] }, run: async () => {} });
   }
 
   // ---- settings.json keys ----
@@ -320,7 +329,13 @@ async function planRemoval(ctx: Context, p: Profile, r: InstallRecord, opts: Rec
   return forget('not a file the hub placed');
 }
 
-async function planBlock(file: string, style: 'import' | 'inline', items: LibraryItem[]): Promise<Step> {
+async function planBlock(
+  file: string,
+  style: 'import' | 'inline',
+  items: LibraryItem[],
+  prior: InstallRecord[],
+  opts: ReconcileOptions,
+): Promise<Step> {
   const name = items.map((i) => i.name).join(', ') || '(removing block)';
   const text = (await readTextIfExists(file)) ?? '';
   const problem = (await linkedFileReason(file)) ?? blockProblem(text);
@@ -333,13 +348,30 @@ async function planBlock(file: string, style: 'import' | 'inline', items: Librar
     body = parts.join('\n\n');
   }
   const next = replaceBlock(text, body);
+  // Text typed inside the block (an inline AGENTS.md copy is easy to edit in place) would be lost on rewrite.
+  // Records from before blockHash existed can't tell, so those blocks are rewritten as before.
+  const current = blockText(text);
+  const wrote = prior.find((r) => r.blockHash)?.blockHash;
+  const edited = next !== text && current !== undefined && wrote !== undefined && textHash(current) !== wrote;
+  if (edited && !opts.force) {
+    return {
+      type: 'write-block', kind: 'instructions', name, path: file, status: 'conflict',
+      reason: 'the AI-Hub block was edited by hand since the hub wrote it; left alone (move your changes out of the block or into the library, or --force overwrites; the old file is kept in the journal)',
+    };
+  }
+  const nextBlock = blockText(next);
   return {
     type: 'write-block', kind: 'instructions', name, path: file,
     status: next === text ? 'ok' : 'pending',
+    ...(edited ? { reason: 'overwriting changes made inside the block (--force; old file kept in the journal)' } : {}),
     run: (tx) => tx.write(file, next),
     replaceRecords: {
       kind: 'instructions', file,
-      records: items.map((i) => ({ kind: 'instructions', name: i.name, strategy: 'block', path: file, hash: i.hash, installedAt: now() })),
+      records: items.map((i) => ({
+        kind: 'instructions', name: i.name, strategy: 'block', path: file, hash: i.hash,
+        ...(nextBlock ? { blockHash: textHash(nextBlock) } : {}),
+        installedAt: now(),
+      })),
     },
   };
 }

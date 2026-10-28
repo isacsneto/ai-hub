@@ -91,8 +91,15 @@ export function SharingPage({ notify }: { notify: Notify }) {
   };
 
   const undo = async () => {
-    const r = await api.undo().catch((e) => (notify(errorText(e), 'bad'), null));
-    notify(r ? `Undid "${r.label}" (${plural(r.reverted, 'change')}).` : 'Nothing to undo.', r ? 'ok' : 'info');
+    const r = await api.undo().catch((e) => (notify(errorText(e), 'bad'), undefined));
+    if (r === undefined) return load();
+    if (!r) notify('Nothing to undo.', 'info');
+    else if (r.failed.length) {
+      notify(`Undid part of "${r.label}". ${plural(r.failed.length, 'change')} couldn't be reversed: ${r.failed[0]}. Fix that and press Undo again to finish.`, 'bad');
+    } else {
+      const kept = r.kept.length ? ` Left ${plural(r.kept.length, 'edited file')} as they are.` : '';
+      notify(`${r.resumed ? 'Finished undoing' : 'Undid'} "${r.label}" (${plural(r.reverted, 'change')}).${kept}`, r.kept.length ? 'info' : 'ok');
+    }
     load();
   };
 

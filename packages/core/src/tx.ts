@@ -25,6 +25,20 @@ interface Journal {
   /** False until the run finished; a crashed run's journal still lists what it did, for undo. */
   committed?: boolean;
   undone?: string;
+  /** An undo or rollback stopped partway: `ops` now lists only what is left, for the next undo to retry. */
+  unfinished?: boolean;
+}
+
+export interface UndoResult {
+  label: string;
+  /** Changes reversed by this run. */
+  reverted: number;
+  /** Left as they are on purpose (edited since, or something new in the way); final, never retried. */
+  kept: string[];
+  /** Couldn't be reversed (permissions, disk); still in the journal, so the next undo retries them. */
+  failed: string[];
+  /** This run finished an undo that stopped partway before. */
+  resumed: boolean;
 }
 
 export const journalRoot = (ctx: Context) => path.join(ctx.hubDir, 'journal');
@@ -131,16 +145,25 @@ export class Transaction {
   }
 
   async rollback(): Promise<string[]> {
-    const problems = await revertAll(this.ops);
-    await this.record(undefined, { undone: new Date().toISOString() });
+    const { kept, failed, remaining } = await revertAll(this.ops);
+    if (remaining.length) {
+      // What couldn't be reversed stays in the journal, so `aihub undo` can finish the rollback.
+      this.ops.splice(0, this.ops.length, ...remaining);
+      await this.record(undefined, { unfinished: true });
+    } else {
+      await this.record(undefined, { undone: new Date().toISOString() });
+    }
     this.ops.length = 0;
-    return problems;
+    return [...failed, ...kept];
   }
 
   async commit(): Promise<void> {
     await this.record(undefined, { committed: true });
   }
 }
+
+/** Undo left this alone on purpose, so nothing is lost; unlike other errors it isn't retried. */
+class Kept extends Error {}
 
 /** Has the hub's copy or write been edited since? Then undo leaves it alone rather than lose the edit. */
 async function changedSince(o: { path: string; hash?: string }): Promise<boolean> {
@@ -159,18 +182,18 @@ async function revert(o: Op): Promise<void> {
       return;
     }
     case 'copy':
-      if (await changedSince(o)) throw new Error('edited since the hub placed it; left as is');
+      if (await changedSince(o)) throw new Kept('edited since the hub placed it; left as is');
       await fs.rm(o.path, { recursive: true, force: true });
       return;
     case 'write':
       if (o.records) return revertRecords(o.path, o.backup);
-      if (await changedSince(o)) throw new Error('edited since the hub wrote it; left as is');
+      if (await changedSince(o)) throw new Kept('edited since the hub wrote it; left as is');
       if (o.backup) await fs.copyFile(o.backup, o.path);
       else await fs.rm(o.path, { force: true });
       return;
     case 'remove':
       if (!(await exists(o.backup))) return; // the move never happened
-      if (await exists(o.path)) throw new Error('something new is in its place; left both');
+      if (await exists(o.path)) throw new Kept(`something new is in its place; left it, and the original is in ${o.backup}`);
       try {
         await fs.rename(o.backup, o.path);
       } catch (err) {
@@ -194,16 +217,23 @@ async function revertRecords(file: string, backup: string | undefined): Promise<
   await atomicWrite(file, JSON.stringify({ version: 1, installs }, null, 2) + '\n');
 }
 
-async function revertAll(ops: Op[]): Promise<string[]> {
-  const problems: string[] = [];
+async function revertAll(ops: Op[]): Promise<{ kept: string[]; failed: string[]; remaining: Op[] }> {
+  const kept: string[] = [];
+  const failed: string[] = [];
+  const remaining: Op[] = [];
   for (const o of [...ops].reverse()) {
     try {
       await revert(o);
     } catch (err) {
-      problems.push(`${o.op} ${o.path}: ${(err as Error).message}`);
+      const line = `${o.op} ${o.path}: ${(err as Error).message}`;
+      if (err instanceof Kept) kept.push(line);
+      else {
+        failed.push(line);
+        remaining.unshift(o); // keeps the original order, so a retry reverses in reverse again
+      }
     }
   }
-  return problems;
+  return { kept, failed, remaining };
 }
 
 /** Run `fn` in a transaction, holding the hub lock: commit on success, roll everything back on failure. */
@@ -224,12 +254,16 @@ export async function withTransaction<T>(ctx: Context, label: string, fn: (tx: T
   });
 }
 
-/** Reverse the most recent committed transaction that hasn't been undone. */
-export async function undoLast(ctx: Context): Promise<{ label: string; reverted: number; problems: string[] } | undefined> {
+/**
+ * Reverse the most recent run that hasn't been undone. If some changes can't be reversed, they stay
+ * in the journal and the next call retries them before going further back.
+ */
+export async function undoLast(ctx: Context): Promise<UndoResult | undefined> {
   return withHubLock(ctx, () => undoLastUnlocked(ctx));
 }
 
-async function undoLastUnlocked(ctx: Context): Promise<{ label: string; reverted: number; problems: string[] } | undefined> {
+/** The newest journal not yet undone (uncommitted ones are runs that crashed midway). */
+async function lastOpenJournal(ctx: Context): Promise<{ file: string; journal: Journal } | undefined> {
   let dirs: string[];
   try {
     dirs = (await fs.readdir(journalRoot(ctx))).sort().reverse();
@@ -239,12 +273,39 @@ async function undoLastUnlocked(ctx: Context): Promise<{ label: string; reverted
   for (const d of dirs) {
     const file = path.join(journalRoot(ctx), d, 'journal.json');
     const journal = (await readJsonIfExists(file)) as Journal | undefined;
-    // Uncommitted journals are runs that crashed midway; undoing them cleans up the partial change.
-    if (!journal || journal.undone) continue;
-    const problems = await revertAll(journal.ops);
-    journal.undone = new Date().toISOString();
-    await atomicWrite(file, JSON.stringify(journal, null, 2) + '\n');
-    return { label: journal.label, reverted: journal.ops.length, problems };
+    if (journal && !journal.undone) return { file, journal };
   }
   return undefined;
+}
+
+async function undoLastUnlocked(ctx: Context): Promise<UndoResult | undefined> {
+  const open = await lastOpenJournal(ctx);
+  if (!open) return undefined;
+  const { file, journal } = open;
+  const resumed = !!journal.unfinished;
+  const { kept, failed, remaining } = await revertAll(journal.ops);
+  const reverted = journal.ops.length - remaining.length - kept.length;
+  if (remaining.length) {
+    journal.ops = remaining;
+    journal.unfinished = true;
+  } else {
+    journal.undone = new Date().toISOString();
+  }
+  await atomicWrite(file, JSON.stringify(journal, null, 2) + '\n');
+  return { label: journal.label, reverted, kept, failed, resumed };
+}
+
+/**
+ * Stop retrying an undo that stopped partway: what it couldn't reverse stays as it is, and the next
+ * undo goes on to the run before it. Returns the label and how many changes were left, if any.
+ */
+export async function abandonUnfinishedUndo(ctx: Context): Promise<{ label: string; left: number } | undefined> {
+  return withHubLock(ctx, async () => {
+    const open = await lastOpenJournal(ctx);
+    if (!open?.journal.unfinished) return undefined;
+    const { file, journal } = open;
+    journal.undone = new Date().toISOString();
+    await atomicWrite(file, JSON.stringify(journal, null, 2) + '\n');
+    return { label: journal.label, left: journal.ops.length };
+  });
 }

@@ -29,6 +29,7 @@ import {
   undoLast,
   undoTakeover,
   withHubLock,
+  abandonUnfinishedUndo,
   type Plan,
 } from '@aihub/core';
 import { action, ctx, dim, itemKind, paint, printPlans, table } from '../ui.js';
@@ -270,16 +271,33 @@ export function registerSharing(program: Command): void {
   program
     .command('undo')
     .description('Reverse the last change the hub made inside tool folders')
+    .option('--skip', 'stop retrying an undo that stopped partway, leaving the rest as it is')
     .action(
-      action(async () => {
+      action(async (opts: { skip?: boolean }) => {
+        if (opts.skip) {
+          const a = await abandonUnfinishedUndo(ctx);
+          console.log(
+            a
+              ? `Stopped undoing "${a.label}"; ${plural(a.left, 'change')} not reversed. The next undo goes to the run before it.`
+              : 'No undo stopped partway; nothing to skip.',
+          );
+          return;
+        }
         const r = await undoLast(ctx);
         if (!r) {
           console.log('Nothing to undo.');
           return;
         }
-        console.log(`Undid "${r.label}" (${plural(r.reverted, 'change')}).`);
-        for (const pr of r.problems) console.log(paint('yellow', `  ⚠ ${pr}`));
-        console.log(dim('hub.yaml still has the sharing choices; `aihub apply` would redo them.'));
+        const what = `${r.resumed ? 'Finished undoing' : 'Undid'} "${r.label}" (${plural(r.reverted, 'change')})`;
+        console.log(r.failed.length ? `${what}, but ${plural(r.failed.length, 'change')} couldn't be reversed:` : `${what}.`);
+        for (const f of r.failed) console.log(paint('red', `  ✗ ${f}`));
+        for (const k of r.kept) console.log(paint('yellow', `  ⚠ ${k}`));
+        if (r.failed.length) {
+          process.exitCode = 1;
+          console.log(dim('Fix that and run `aihub undo` again to finish (`aihub undo --skip` gives up on the rest).'));
+        } else {
+          console.log(dim('hub.yaml still has the sharing choices; `aihub apply` would redo them.'));
+        }
       }),
     );
 
