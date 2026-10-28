@@ -40,9 +40,13 @@ const Sharing = z.strictObject({
   settings: z.array(z.string()).optional(),
 });
 
+/** A label as typed or imported, made safe for menus, file names and script comments. */
+export const cleanLabel = (s: string) => s.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
+
 const id = ProfileId;
 const base = {
-  label: z.string().min(1),
+  // Labels end up in launcher file names and generated scripts: one line, no control characters.
+  label: z.string().min(1).max(80).regex(/^[^\u0000-\u001f\u007f]+$/, 'must be one line without control characters'),
   icon: Icon.optional(),
   sharing: Sharing.optional(),
   /** Set when another tool (cpm, claude-account-guard…) owns this folder; the hub then only reads it. */

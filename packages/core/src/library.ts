@@ -199,7 +199,8 @@ export async function setSharedSetting(ctx: Context, key: string, value: unknown
 // ---------- history (git) ----------
 
 async function git(ctx: Context, args: string[]) {
-  return ctx.sys.run('git', ['-C', libraryDir(ctx), ...args], {
+  // Never run hooks or fsmonitor commands from the library's repo, whatever its config says.
+  return ctx.sys.run('git', ['-C', libraryDir(ctx), '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', ...args], {
     env: { ...ctx.env, GIT_AUTHOR_NAME: 'AI-Hub', GIT_AUTHOR_EMAIL: 'aihub@localhost', GIT_COMMITTER_NAME: 'AI-Hub', GIT_COMMITTER_EMAIL: 'aihub@localhost' },
   });
 }

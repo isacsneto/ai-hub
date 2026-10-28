@@ -3,7 +3,7 @@ import path from 'node:path';
 import { parse as parseToml } from 'smol-toml';
 import { adapterFor, defaultCursorDataDir, defaultDesktopDataDir } from './adapters/index.js';
 import type { Identity } from './adapters/types.js';
-import type { ClaudeCodeProfile, Hub, Profile } from './config.js';
+import { cleanLabel, type ClaudeCodeProfile, type Hub, type Profile } from './config.js';
 import type { Context } from './context.js';
 import { exists, isDirectory, readTextIfExists } from './fsx.js';
 import { contractHome, resolvePath } from './paths.js';
@@ -92,9 +92,7 @@ async function readClaudeProfilesInstances(ctx: Context) {
       found.push({
         app,
         slug,
-        label:
-          (await readPlistString(ctx, plist, 'CFBundleDisplayName')) ??
-          name.replace(/\.app$/, ''),
+        label: cleanLabel((await readPlistString(ctx, plist, 'CFBundleDisplayName')) ?? '') || name.replace(/\.app$/, ''),
         dataDir:
           shellAssignment(script, 'DATA_DIR', ctx.home) ?? path.join(ctx.home, '.claude-instances', slug),
         configDir: shellAssignment(script, 'CONFIG_DIR', ctx.home),
@@ -119,6 +117,9 @@ export async function discover(ctx: Context, hub: Hub): Promise<Candidate[]> {
     const rest = profile.label.replace(/\(.*?\)/g, '').replace(/\b(claude|codex|code|desktop)\b/gi, '');
     const badge = rest.match(/[a-z0-9]/i)?.[0]?.toUpperCase();
     profile.icon ??= { color, ...(badge ? { badge } : {}) };
+    // Two sources can suggest the same id (a cpm profile named "default" next to ~/.claude).
+    const wanted = profile.id;
+    for (let n = 2; out.some((c) => c.profile.id === profile.id); n++) profile.id = `${wanted}-${n}`;
     out.push({ profile, source, warnings, state: 'new' });
   };
   const claudeByRoot = (root: string) =>
@@ -139,7 +140,7 @@ export async function discover(ctx: Context, hub: Hub): Promise<Candidate[]> {
         {
           id: toProfileId(`claude-${cp.name}`),
           tool: 'claude-code',
-          label: cp.description ?? `Claude ${cp.name}`,
+          label: cleanLabel(cp.description ?? '') || `Claude ${cp.name}`,
           home: contractHome(cp.dir, ctx.home),
           managedBy: guard ? 'claude-account-guard' : 'cpm',
         },
@@ -222,7 +223,8 @@ export async function discover(ctx: Context, hub: Hub): Promise<Candidate[]> {
       continue;
     }
     let id = c.profile.id;
-    for (let n = 2; hub.profiles.some((p) => p.id === id); n++) id = `${c.profile.id}-${n}`;
+    const taken = (x: string) => hub.profiles.some((p) => p.id === x) || out.some((o) => o !== c && o.profile.id === x);
+    for (let n = 2; taken(id); n++) id = `${c.profile.id}-${n}`;
     if (id !== c.profile.id) renamed.set(c.profile.id, id);
     c.profile.id = id;
   }

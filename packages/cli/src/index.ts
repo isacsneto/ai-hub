@@ -10,14 +10,18 @@ import {
   adapterFor,
   adoptProfile,
   applyImport,
+  cleanLabel,
   contractHome,
   createProfile,
+  defaultLabel,
   discover,
   doctor,
   getProfile,
   loadHub,
   newProfileFolder,
+  plural,
   reconcile,
+  relabelProfile,
   removeProfile,
   saveHub,
   shellQuote,
@@ -152,7 +156,7 @@ program
         console.log(table(['', 'ID', 'LABEL', 'ACCOUNT', 'FOLDER', 'NOTES'], rows));
         console.log(
           added.length
-            ? `\nRegistered ${added.length} profile(s). Nothing inside their folders was changed.\nInventory snapshot: ${contractHome(snapshot!, ctx.home)}`
+            ? `\nRegistered ${plural(added.length, 'profile')}. Nothing inside their folders was changed.\nInventory snapshot: ${contractHome(snapshot!, ctx.home)}`
             : '\nNothing new to register.',
         );
       } else {
@@ -163,6 +167,26 @@ program
   );
 
 const toolArgument = () => new Argument('<tool>').choices(TOOL_IDS);
+
+/** Options that only mean something for some tools; anything else is an error rather than silently ignored. */
+const TOOL_OPTIONS: Record<string, { flag: string; tools: ToolId[] }> = {
+  codeProfile: { flag: '--code-profile', tools: ['claude-desktop'] },
+  codexHome: { flag: '--codex-home', tools: ['codex-desktop'] },
+  codexProfile: { flag: '--codex-profile', tools: ['codex-desktop'] },
+  browser: { flag: '--browser', tools: ['browser'] },
+  url: { flag: '--url', tools: ['browser'] },
+  isolatedHome: { flag: '--isolated-home', tools: ['cursor'] },
+  folder: { flag: '--folder', tools: TOOL_IDS.filter((t) => t !== 'codex-desktop') },
+};
+
+function rejectOtherToolOptions(tool: ToolId, opts: object): void {
+  for (const [key, value] of Object.entries(opts)) {
+    const rule = TOOL_OPTIONS[key];
+    if (rule && value !== undefined && !rule.tools.includes(tool)) {
+      throw new Error(`${rule.flag} doesn't apply to ${tool} profiles (only ${rule.tools.join(', ')}).`);
+    }
+  }
+}
 
 program
   .command('adopt')
@@ -175,8 +199,9 @@ program
   .option('--force', "adopt even if the folder doesn't look like that tool's")
   .action(
     action(async (tool: ToolId, folder: string, opts: { id: string; label?: string; codeProfile?: string; force?: boolean }) => {
+      rejectOtherToolOptions(tool, opts);
       const hub = await loadHub(ctx);
-      const label = opts.label ?? opts.id;
+      const label = cleanLabel(opts.label ?? '') || defaultLabel(tool, opts.id);
       if (tool === 'codex-desktop' || tool === 'browser') {
         throw new Error(`Use \`aihub profile add ${tool}\`; there is no existing folder to adopt.`);
       }
@@ -219,10 +244,12 @@ profile
           browser?: string; url?: string; isolatedHome?: boolean; badge?: string; color?: string;
         },
       ) => {
+        rejectOtherToolOptions(tool, opts);
+        if (opts.codexHome && opts.codexProfile) throw new Error('Use --codex-profile or --codex-home, not both.');
         const hub = await loadHub(ctx);
         const folder = opts.folder ?? newProfileFolder(ctx, id);
         const icon = opts.badge || opts.color ? { badge: opts.badge, color: opts.color } : undefined;
-        const common = { id, label: opts.label ?? id, ...(icon ? { icon } : {}) };
+        const common = { id, label: cleanLabel(opts.label ?? '') || defaultLabel(tool, id, opts.url), ...(icon ? { icon } : {}) };
         let p: Profile;
         if (tool === 'claude-desktop') {
           p = { ...common, tool, dataDir: folder, ...(opts.codeProfile ? { codeProfile: opts.codeProfile } : {}) };
@@ -278,12 +305,13 @@ profile
     action(async (id: string, opts: { label?: string; badge?: string; color?: string }) => {
       const hub = await loadHub(ctx);
       const p = getProfile(hub, id);
-      if (opts.label) p.label = opts.label;
+      const rebuilt = opts.label ? await relabelProfile(ctx, hub, p, opts.label) : undefined;
       if (opts.badge || opts.color) {
         p.icon = { ...p.icon, ...(opts.badge ? { badge: opts.badge } : {}), ...(opts.color ? { color: opts.color } : {}) };
       }
       await saveHub(ctx, hub);
       console.log(`Updated ${id}.`);
+      if (rebuilt) console.log(dim(`Launcher renamed: ${contractHome(rebuilt, ctx.home)}`));
     }),
   );
 
@@ -347,7 +375,7 @@ program
             if (f.hint) console.log(dim(`      → ${f.hint}`));
           }
         }
-        const summary = `${report.errors} error(s), ${report.warnings} warning(s)`;
+        const summary = `${plural(report.errors, 'error')}, ${plural(report.warnings, 'warning')}`;
         console.log('\n' + (report.errors ? paint('red', summary) : report.warnings ? paint('yellow', summary) : paint('green', summary)));
       }
       if (report.errors) process.exitCode = 1;

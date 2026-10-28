@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { api, errorText, type DoctorReport } from '../api';
-import { Button, Chip, PageHeader } from '../components/ui';
+import { api, errorText, type DoctorReport, type ProfileView } from '../api';
+import { Button, Chip, PageHeader, plural } from '../components/ui';
 
 type Finding = DoctorReport['findings'][number];
 
@@ -15,6 +15,7 @@ export function HealthPage() {
   const [report, setReport] = useState<DoctorReport>();
   const [error, setError] = useState<string>();
   const [running, setRunning] = useState(false);
+  const [views, setViews] = useState<ProfileView[]>([]);
 
   const run = () => {
     setRunning(true);
@@ -25,11 +26,22 @@ export function HealthPage() {
       .finally(() => setRunning(false));
   };
   useEffect(run, []);
+  useEffect(() => {
+    api.profiles().then(setViews).catch(() => undefined);
+  }, []);
 
-  const groups = new Map<string, Finding[]>();
-  for (const f of report?.findings ?? []) {
-    const key = f.profile ?? (f.tool ? `Tool: ${f.tool}` : 'Hub');
-    groups.set(key, [...(groups.get(key) ?? []), f]);
+  const labels = Object.fromEntries(views.map((v) => [v.profile.id, v.profile.label]));
+  const toolNames: Record<string, string> = Object.fromEntries(views.map((v) => [v.profile.tool, v.toolName]));
+
+  // Profiles first: they're what you act on. Tool-wide notes (tested versions, shared folders) come after.
+  const groups = new Map<string, { title: string; findings: Finding[] }>();
+  const sorted = [...(report?.findings ?? [])].sort((a, b) => Number(!a.profile) - Number(!b.profile));
+  for (const f of sorted) {
+    const key = f.profile ? `p:${f.profile}` : f.tool ? `t:${f.tool}` : 'hub';
+    const title = f.profile ? (labels[f.profile] ?? f.profile) : f.tool ? `${toolNames[f.tool] ?? f.tool} · all profiles` : 'Hub';
+    const g = groups.get(key) ?? { title, findings: [] };
+    g.findings.push(f);
+    groups.set(key, g);
   }
 
   return (
@@ -46,14 +58,14 @@ export function HealthPage() {
       {error && <div className="mb-3 rounded-lg border border-bad/50 bg-bad/10 px-3 py-2">{error}</div>}
       {report && (
         <div className="mb-4 flex gap-2">
-          <Chip tone={report.errors ? 'bad' : 'ok'}>{report.errors} error(s)</Chip>
-          <Chip tone={report.warnings ? 'warn' : 'ok'}>{report.warnings} warning(s)</Chip>
+          <Chip tone={report.errors ? 'bad' : 'ok'}>{plural(report.errors, 'error')}</Chip>
+          <Chip tone={report.warnings ? 'warn' : 'ok'}>{plural(report.warnings, 'warning')}</Chip>
         </div>
       )}
       <div className="grid grid-cols-[repeat(auto-fill,minmax(420px,1fr))] gap-3">
-        {[...groups].map(([key, findings]) => (
-          <div key={key} className="rounded-xl border border-line bg-panel p-4">
-            <div className="mb-2 font-semibold">{key}</div>
+        {[...groups].map(([key, { title, findings }]) => (
+          <div key={key} className={`rounded-xl border border-line p-4 ${key.startsWith('p:') ? 'bg-panel' : 'bg-panel/50'}`}>
+            <div className="mb-2 font-semibold">{title}</div>
             <ul className="space-y-1.5">
               {findings.map((f, i) => (
                 <li key={i} className="flex gap-2 text-[12.5px]">

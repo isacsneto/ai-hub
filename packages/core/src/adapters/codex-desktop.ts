@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { CodexDesktopProfile } from '../config.js';
 import type { Context } from '../context.js';
+import { APP_ENV_STRIP, cleanEnv } from '../env.js';
 import { exists } from '../fsx.js';
 import { resolvePath } from '../paths.js';
 import { readPlistString } from '../plist.js';
@@ -40,7 +41,7 @@ export const codexDesktop: ToolAdapter<CodexDesktopProfile> = {
     if (!app) throw new Error('ChatGPT.app (Codex) was not found in /Applications.');
     const paths = codex.paths(ctx, asCodex(p));
     const open = paths.isDefault ? ['-a', app] : ['-n', '-a', app, '--env', `CODEX_HOME=${paths.root}`];
-    return { command: '/usr/bin/open', args: [...open, ...(args.length ? ['--args', ...args] : [])], env: ctx.env };
+    return { command: '/usr/bin/open', args: [...open, ...(args.length ? ['--args', ...args] : [])], env: cleanEnv(ctx.env, APP_ENV_STRIP) };
   },
 
   looksLikeRoot: (dir) => codex.looksLikeRoot(dir),

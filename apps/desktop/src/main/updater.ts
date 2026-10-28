@@ -4,6 +4,9 @@ import { createWriteStream } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { Readable, Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import type { ReadableStream } from 'node:stream/web';
 import { compareVersions, readPlistString, realSystem, type Context } from '@aihub/core';
 
 /**
@@ -83,31 +86,79 @@ export interface CheckResult {
   release?: Release;
   latest?: string;
   available: boolean;
+  /** A newer version exists, but its release has no build for this Mac. */
+  missingBuild?: boolean;
 }
 
-export async function checkForUpdate(repo: string, current: string): Promise<CheckResult> {
+export async function checkForUpdate(repo: string, current: string, arch: string = process.arch): Promise<CheckResult> {
   const release = await fetchLatestRelease(repo);
   if (!release || release.draft || release.prerelease) return { available: false };
   const latest = versionOf(release.tag_name);
-  const usable = !!pickAssets(release);
-  return { release, latest, available: usable && compareVersions(latest, current) > 0 };
+  const newer = compareVersions(latest, current) > 0;
+  const usable = !!pickAssets(release, arch);
+  return { release, latest, available: newer && usable, missingBuild: newer && !usable };
 }
 
+/** Stream a download to `file`, returning its SHA-256. Write errors (e.g. a full disk) reject instead of crashing. */
 async function download(url: string, file: string, onProgress: (received: number, total: number) => void): Promise<string> {
   const res = await fetch(url, { headers: { 'User-Agent': headers['User-Agent'] } });
   if (!res.ok || !res.body) throw new Error(`Download failed (${res.status})`);
   const total = Number(res.headers.get('content-length') ?? 0);
   const hash = createHash('sha256');
-  const out = createWriteStream(file);
   let received = 0;
-  for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
-    hash.update(chunk);
-    received += chunk.length;
-    if (!out.write(chunk)) await new Promise<void>((r) => out.once('drain', () => r()));
-    onProgress(received, total);
-  }
-  await new Promise<void>((resolve, reject) => out.end((err?: Error | null) => (err ? reject(err) : resolve())));
+  const tap = new Transform({
+    transform(chunk: Buffer, _enc, done) {
+      hash.update(chunk);
+      received += chunk.length;
+      onProgress(received, total);
+      done(null, chunk);
+    },
+  });
+  await pipeline(Readable.fromWeb(res.body as ReadableStream), tap, createWriteStream(file));
   return hash.digest('hex');
+}
+
+const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+
+/**
+ * The script that swaps the app once `pid` has exited. A lock in the backup folder keeps two
+ * installs from interleaving; a failed swap puts the old app back; only the newest backup is kept.
+ */
+export function swapScript(o: {
+  pid: number;
+  app: string;
+  next: string;
+  backup: string;
+  work: string;
+  /** Version being replaced: if the installed app is no longer it, another install already ran. */
+  current: string;
+  relaunch: boolean;
+}): string {
+  const backups = path.dirname(o.backup);
+  const lock = path.join(backups, '.installing');
+  const plist = path.join(o.app, 'Contents/Info.plist');
+  return [
+    '#!/bin/bash',
+    `while kill -0 ${o.pid} 2>/dev/null; do sleep 0.2; done`,
+    // A lock left by a crashed install expires after 10 minutes.
+    `find ${q(lock)} -maxdepth 0 -mmin +10 -exec rm -rf {} + 2>/dev/null`,
+    `if mkdir ${q(lock)} 2>/dev/null; then`,
+    `  if [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' ${q(plist)} 2>/dev/null)" = ${q(o.current)} ]; then`,
+    `    rm -rf ${q(o.backup)}`,
+    `    if mv ${q(o.app)} ${q(o.backup)}; then`,
+    `      if mv ${q(o.next)} ${q(o.app)}; then`,
+    `        for old in ${q(backups)}/AI-Hub-*.app; do [ "$old" = ${q(o.backup)} ] || rm -rf "$old"; done`,
+    '      else',
+    `        mv ${q(o.backup)} ${q(o.app)}`,
+    '      fi',
+    '    fi',
+    '  fi',
+    `  rmdir ${q(lock)}`,
+    o.relaunch ? `  open ${q(o.app)}` : '  :',
+    'fi',
+    `rm -rf ${q(o.work)}`,
+    '',
+  ].join('\n');
 }
 
 async function run(cmd: string, args: string[]): Promise<void> {
@@ -139,8 +190,25 @@ export async function downloadAndInstall(opts: {
   if (!assets) throw new Error(`Release ${opts.release.tag_name} has no ${zipName(versionOf(opts.release.tag_name))} with checksums.`);
 
   const work = await fs.mkdtemp(path.join(os.tmpdir(), 'aihub-update-'));
+  try {
+    await stage(opts, target.app, assets, work);
+  } catch (err) {
+    await fs.rm(work, { recursive: true, force: true });
+    throw err;
+  }
+  opts.quit();
+}
+
+async function stage(
+  opts: Parameters<typeof downloadAndInstall>[0],
+  app: string,
+  assets: NonNullable<ReturnType<typeof pickAssets>>,
+  work: string,
+): Promise<void> {
   const zip = path.join(work, assets.zip.name);
-  const sums = await (await fetch(assets.sums.browser_download_url, { headers: { 'User-Agent': headers['User-Agent'] } })).text();
+  const sumsRes = await fetch(assets.sums.browser_download_url, { headers: { 'User-Agent': headers['User-Agent'] } });
+  if (!sumsRes.ok) throw new Error(`Checksum download failed (${sumsRes.status})`);
+  const sums = await sumsRes.text();
   const expected = checksumFor(sums, assets.zip.name);
   if (!expected) throw new Error('The release checksum file does not list the app zip.');
   const actual = await download(assets.zip.browser_download_url, zip, opts.onProgress);
@@ -165,22 +233,6 @@ export async function downloadAndInstall(opts: {
   await fs.mkdir(backupDir, { recursive: true });
   const backup = path.join(backupDir, `AI-Hub-${opts.current}.app`);
   const script = path.join(work, 'install.sh');
-  const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
-  await fs.writeFile(
-    script,
-    [
-      '#!/bin/bash',
-      `while kill -0 ${process.pid} 2>/dev/null; do sleep 0.2; done`,
-      `rm -rf ${q(backup)}`,
-      `if mv ${q(target.app)} ${q(backup)}; then`,
-      `  mv ${q(next)} ${q(target.app)} || mv ${q(backup)} ${q(target.app)}`,
-      'fi',
-      opts.relaunch === false ? '' : `open ${q(target.app)}`,
-      `rm -rf ${q(work)}`,
-      '',
-    ].join('\n'),
-    { mode: 0o700 },
-  );
+  await fs.writeFile(script, swapScript({ pid: process.pid, app, next, backup, work, current: opts.current, relaunch: opts.relaunch !== false }), { mode: 0o700 });
   spawn('/bin/bash', [script], { detached: true, stdio: 'ignore' }).unref();
-  opts.quit();
 }

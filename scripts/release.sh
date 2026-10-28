@@ -13,7 +13,8 @@ npm version "$version" --no-git-tag-version --workspaces --include-workspace-roo
 sed -i '' -E "s/AIHUB_VERSION = '[^']+'/AIHUB_VERSION = '$version'/" packages/core/src/version.ts
 npm install --package-lock-only >/dev/null
 
-npm run build >/dev/null && npm test >/dev/null || { echo "Build or tests failed; nothing committed." >&2; git checkout -- .; exit 1; }
+npm run build >/dev/null && npm run typecheck >/dev/null && npm test >/dev/null ||
+  { echo "Build, typecheck or tests failed; nothing committed." >&2; git checkout -- .; exit 1; }
 
 git commit -am "Release v$version"
 git tag "v$version"

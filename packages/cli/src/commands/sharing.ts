@@ -13,6 +13,7 @@ import {
   loadSharedSettings,
   mainFile,
   parseShareKind,
+  plural,
   previewPluginMcp,
   profilesSharing,
   promote,
@@ -27,6 +28,7 @@ import {
   takeover,
   undoLast,
   undoTakeover,
+  withHubLock,
   type Plan,
 } from '@aihub/core';
 import { action, ctx, dim, itemKind, paint, printPlans, table } from '../ui.js';
@@ -231,16 +233,17 @@ export function registerSharing(program: Command): void {
             ids: string[],
             opts: { allowMcp?: boolean; detach?: boolean; force?: boolean; dryRun?: boolean; apply: boolean },
           ) => {
-            const hub = await loadHub(ctx);
-            const profiles = await setSharing(ctx, hub, parseShareKind(kind), name, ids, on, { allowMcp: opts.allowMcp });
-            if (!opts.dryRun) await saveHub(ctx, hub);
-            if (!opts.apply) {
-              console.log('Recorded in hub.yaml. Apply with: aihub apply');
-              return;
-            }
-            const plans: Plan[] = [];
-            for (const p of profiles) plans.push(await reconcile(ctx, hub, p, opts));
-            printPlans(plans, opts.dryRun);
+            const plans = await withHubLock(ctx, async () => {
+              const hub = await loadHub(ctx);
+              const profiles = await setSharing(ctx, hub, parseShareKind(kind), name, ids, on, { allowMcp: opts.allowMcp });
+              if (!opts.dryRun) await saveHub(ctx, hub);
+              if (!opts.apply) return undefined;
+              const out: Plan[] = [];
+              for (const p of profiles) out.push(await reconcile(ctx, hub, p, opts));
+              return out;
+            });
+            if (plans) printPlans(plans, opts.dryRun);
+            else console.log(opts.dryRun ? 'Would record this in hub.yaml (dry run: nothing saved).' : 'Recorded in hub.yaml. Apply with: aihub apply');
           },
         ),
       );
@@ -257,8 +260,10 @@ export function registerSharing(program: Command): void {
       action(async (id: string | undefined, opts: { dryRun?: boolean; detach?: boolean; force?: boolean; json?: boolean }) => {
         const hub = await loadHub(ctx);
         const plans = id ? [await reconcile(ctx, hub, getProfile(hub, id), opts)] : await reconcileAll(ctx, hub, opts);
-        if (opts.json) console.log(JSON.stringify(plans, null, 2));
-        else printPlans(plans, opts.dryRun);
+        if (opts.json) {
+          console.log(JSON.stringify(plans, null, 2));
+          if (plans.some((p) => ('error' in p && p.error) || p.actions.some((a) => a.status === 'failed'))) process.exitCode = 1;
+        } else printPlans(plans, opts.dryRun);
       }),
     );
 
@@ -272,7 +277,7 @@ export function registerSharing(program: Command): void {
           console.log('Nothing to undo.');
           return;
         }
-        console.log(`Undid "${r.label}" (${r.reverted} change(s)).`);
+        console.log(`Undid "${r.label}" (${plural(r.reverted, 'change')}).`);
         for (const pr of r.problems) console.log(paint('yellow', `  ⚠ ${pr}`));
         console.log(dim('hub.yaml still has the sharing choices; `aihub apply` would redo them.'));
       }),
@@ -287,7 +292,7 @@ export function registerSharing(program: Command): void {
       action(async (opts: { dryRun?: boolean; undo?: boolean }) => {
         const hub = await loadHub(ctx);
         if (opts.undo) {
-          for (const line of await undoTakeover(ctx, hub)) console.log(`✓ ${line}`);
+          for (const line of await undoTakeover(ctx, hub, opts)) console.log(`${opts.dryRun ? '→' : '✓'} ${line}`);
           return;
         }
         const plan = await takeover(ctx, hub, opts);

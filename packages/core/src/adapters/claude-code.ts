@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import type { ClaudeCodeProfile } from '../config.js';
 import { findExecutable, type Context } from '../context.js';
-import { cleanEnv } from '../env.js';
+import { CLAUDE_ENV_STRIP, cleanEnv } from '../env.js';
 import { exists, listEntries, readJsonIfExists, symlinkTargetOf } from '../fsx.js';
 import { resolvePath } from '../paths.js';
 import { TESTED } from './tested.js';
@@ -21,7 +21,7 @@ export function claudeKeychainService(configDir?: string): string {
 }
 
 /** Inherited CLAUDE_* / ANTHROPIC_* values (tokens, config dirs, session ids) must not leak in. */
-export const CLAUDE_ENV_STRIP = [/^CLAUDE_/, /^CLAUDECODE$/, /^ANTHROPIC_/];
+export { CLAUDE_ENV_STRIP };
 
 async function jsonKeys(file: string, key: string): Promise<string[]> {
   const j = (await readJsonIfExists(file).catch(() => undefined)) as Record<string, unknown> | undefined;
@@ -113,7 +113,7 @@ export const claudeCode: ToolAdapter<ClaudeCodeProfile> = {
     const paths = this.paths(ctx, p);
     // The default dir must run without CLAUDE_CONFIG_DIR: setting it changes the Keychain item name.
     const set = paths.isDefault ? {} : { CLAUDE_CONFIG_DIR: paths.root };
-    return { command: bin, args, env: cleanEnv(ctx.env, CLAUDE_ENV_STRIP, set) };
+    return { command: bin, args, env: cleanEnv(ctx.env, [...CLAUDE_ENV_STRIP, /^ELECTRON_RUN_AS_NODE$/], set) };
   },
 
   shareTarget(ctx, p, kind, name): ShareTarget {

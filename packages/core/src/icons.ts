@@ -61,29 +61,34 @@ function generatedSvg(size: number, color: string, letter: string): string {
 </svg>`;
 }
 
-/** Colored dot with an optional 1–2 letter badge, for the bottom-right corner. */
-function badgeSvg(size: number, color: string, text: string | undefined): string {
+/** Colored dot with a 1–2 letter badge, for the bottom-right corner. */
+function badgeSvg(size: number, color: string, text: string): string {
   const d = size * 0.44;
   const c = d / 2;
-  const fontSize = (text && text.length > 1 ? 0.38 : 0.5) * d;
+  const fontSize = (text.length > 1 ? 0.38 : 0.5) * d;
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${d}" height="${d}">
   <circle cx="${c}" cy="${c}" r="${c - d * 0.02}" fill="#fff"/>
   <circle cx="${c}" cy="${c}" r="${c - d * 0.09}" fill="${color}"/>
-  ${text ? `<text x="50%" y="50%" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-weight="700" font-size="${fontSize}" fill="#fff" text-anchor="middle" dominant-baseline="central">${escapeXml(text)}</text>` : ''}
+  <text x="50%" y="50%" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-weight="700" font-size="${fontSize}" fill="#fff" text-anchor="middle" dominant-baseline="central">${escapeXml(text)}</text>
 </svg>`;
+}
+
+/** First letter of the part of the label that tells profiles apart ("Claude Code · Work" → "W"). */
+export function labelInitial(label: string): string {
+  const part = label.split('·').pop() ?? label;
+  return part.replace(/[^\p{L}\p{N}]/gu, '').charAt(0).toUpperCase();
 }
 
 /** The profile's icon as a square PNG: base app icon + badge, or a generated tile. */
 export async function renderIcon(ctx: Context, p: Profile, size = 1024): Promise<Buffer> {
   const color = p.icon?.color ?? DEFAULT_COLOR;
-  const badge = p.icon?.badge;
+  const badge = p.icon?.badge || labelInitial(p.label) || '?';
   const file = await baseIconFile(ctx, p);
   // No usable base image (none set, app missing, unreadable icns): fall back to a generated tile.
   const base = file ? await loadBase(ctx, file, size).catch(() => undefined) : undefined;
-  if (!base) {
-    const letter = badge ?? p.label.replace(/[^A-Za-z0-9]/g, '').charAt(0).toUpperCase();
-    return sharp(Buffer.from(generatedSvg(size, color, letter || '?'))).png().toBuffer();
-  }
+  if (!base) return sharp(Buffer.from(generatedSvg(size, color, badge))).png().toBuffer();
+  // Without a chosen badge or color the plain app icon is clearer than a grey dot.
+  if (!p.icon?.badge && !p.icon?.color) return base;
   const overlay = await sharp(Buffer.from(badgeSvg(size, color, badge))).png().toBuffer();
   const offset = Math.round(size - size * 0.44 - size * 0.04);
   return sharp(base).composite([{ input: overlay, left: offset, top: offset }]).png().toBuffer();

@@ -42,6 +42,8 @@ export function shellInit(hub: Hub, shell: 'zsh' | 'bash', cmd = 'aihub'): strin
     `_aihub_auto() {
   local want; want="$(_aihub_find)"
   if [ -n "$want" ] && [ "$want" != "\${AIHUB_PROFILE:-}" ]; then
+    # Leaving another linked folder: drop its account first, even when the new profile is another tool's.
+    [ -n "\${AIHUB_AUTO:-}" ] && unset CLAUDE_CONFIG_DIR CODEX_HOME
     eval "$(${cmd} env "$want")" && export AIHUB_AUTO=1 && echo "aihub: using $want here" >&2
   elif [ -z "$want" ] && [ -n "\${AIHUB_AUTO:-}" ]; then
     unset CLAUDE_CONFIG_DIR CODEX_HOME AIHUB_PROFILE AIHUB_AUTO

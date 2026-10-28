@@ -1,6 +1,12 @@
 import { useEffect, useState, type ButtonHTMLAttributes, type ReactNode } from 'react';
 import { api } from '../api';
 
+/** "1 profile", "3 profiles". */
+export const plural = (n: number, word: string, many = `${word}s`) => `${n} ${n === 1 ? word : many}`;
+
+/** First letter of the part of a label that tells profiles apart ("Claude Code · Work" → "W"); matches core's labelInitial. */
+export const labelInitial = (label: string) => (label.split('·').pop() ?? label).replace(/[^\p{L}\p{N}]/gu, '').charAt(0).toUpperCase();
+
 export function Button({
   variant = 'default',
   className = '',
@@ -100,10 +106,10 @@ export function Empty({ title, children }: { title: string; children?: ReactNode
 
 export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: string; actions?: ReactNode }) {
   return (
-    <div className="mb-5 flex items-end justify-between gap-4">
-      <div>
+    <div className="mb-5 flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+      <div className="min-w-72 flex-1">
         <h1 className="text-[20px] font-semibold tracking-tight">{title}</h1>
-        {subtitle && <p className="mt-0.5 text-muted">{subtitle}</p>}
+        {subtitle && <p className="mt-0.5 max-w-2xl text-muted">{subtitle}</p>}
       </div>
       <div className="flex shrink-0 gap-2">{actions}</div>
     </div>

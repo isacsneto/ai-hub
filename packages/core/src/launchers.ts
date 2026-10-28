@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { adapterFor } from './adapters/index.js';
-import { preferences, type Hub, type Profile } from './config.js';
+import { cleanLabel, preferences, type Hub, type Profile } from './config.js';
 import type { Context } from './context.js';
 import { shellQuote } from './env.js';
 import { atomicWrite, exists } from './fsx.js';
@@ -56,7 +56,7 @@ export async function sessionScript(ctx: Context, hub: Hub, p: Profile): Promise
   const shell = (ctx.env.SHELL ?? '/bin/zsh').endsWith('bash') ? '/bin/bash' : '/bin/zsh';
   return [
     `#!${shell} -l`,
-    `# AI-Hub session for "${p.label}" (${p.id}). Regenerate with: aihub launcher build ${p.id}`,
+    `# AI-Hub session for "${cleanLabel(p.label)}" (${p.id}). Regenerate with: aihub launcher build ${p.id}`,
     `while IFS='=' read -r name _; do case "$name" in ${globs.join('|') || '__none__'}) unset "$name" ;; esac; done < <(env)`,
     ...sets.map(([k, v]) => `export ${k}=${shellQuote(v!)}`),
     `export AIHUB_PROFILE=${shellQuote(p.id)}`,
@@ -110,6 +110,21 @@ export async function buildLauncher(ctx: Context, hub: Hub, p: Profile, opts: { 
   // Ad-hoc signature so Gatekeeper treats it as a local app; harmless if it fails.
   await ctx.sys.run('/usr/bin/codesign', ['--force', '--sign', '-', app]);
   return app;
+}
+
+/**
+ * Rename a profile. Its launcher is named after the label, so an existing one is rebuilt under the
+ * new name and the old one removed (otherwise it would linger, unknown to `launcher remove`).
+ */
+export async function relabelProfile(ctx: Context, hub: Hub, p: Profile, label: string): Promise<string | undefined> {
+  const next = cleanLabel(label);
+  if (!next) throw new Error('The name is empty.');
+  const old = { ...p };
+  p.label = next;
+  if (next === old.label || !(await exists(launcherPath(ctx, hub, old)))) return undefined;
+  const built = await buildLauncher(ctx, hub, p);
+  await removeLauncher(ctx, hub, old);
+  return built;
 }
 
 export async function removeLauncher(ctx: Context, hub: Hub, p: Profile, opts: { dir?: string } = {}): Promise<string | undefined> {

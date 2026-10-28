@@ -4,7 +4,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# electron-builder and process.arch call Intel "x64"; uname says x86_64.
 ARCH="${ARCH:-$(uname -m)}"
+[ "$ARCH" = x86_64 ] && ARCH=x64
 VERSION=$(node -p "require('./package.json').version")
 rm -rf release
 

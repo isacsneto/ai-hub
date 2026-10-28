@@ -60,7 +60,9 @@ export function registerLaunchers(program: Command): void {
       action(async (id: string, opts: { out: string; size: string }) => {
         const hub = await loadHub(ctx);
         const out = path.resolve(opts.out || `${id}-icon.png`);
-        await fs.writeFile(out, await renderIcon(ctx, getProfile(hub, id), Number(opts.size)));
+        const size = Number(opts.size);
+        if (!Number.isInteger(size) || size < 16 || size > 2048) throw new Error('--size must be a whole number of pixels from 16 to 2048.');
+        await fs.writeFile(out, await renderIcon(ctx, getProfile(hub, id), size));
         console.log(`Wrote ${contractHome(out, ctx.home)}`);
       }),
     );
@@ -80,7 +82,9 @@ export function registerLaunchers(program: Command): void {
     .description(`Use a profile automatically in this folder (writes ${PROFILE_FILE}; needs shell-init)`)
     .action(
       action(async (id: string) => {
-        getProfile(await loadHub(ctx), id);
+        const p = getProfile(await loadHub(ctx), id);
+        // The shell hook runs `aihub env`, which only CLI profiles support.
+        if (p.tool !== 'claude-code' && p.tool !== 'codex') throw new Error(`${id} is a ${p.tool} profile; only claude-code and codex profiles can be linked to a folder.`);
         console.log(`Wrote ${contractHome(await writeProfileFile(process.cwd(), id), ctx.home)}`);
       }),
     );
@@ -90,7 +94,12 @@ export function registerLaunchers(program: Command): void {
     .description(`Remove ${PROFILE_FILE} from this folder`)
     .action(
       action(async () => {
-        await fs.rm(path.join(process.cwd(), PROFILE_FILE));
+        const file = path.join(process.cwd(), PROFILE_FILE);
+        if (!(await fs.lstat(file).catch(() => undefined))) {
+          console.log(`No ${PROFILE_FILE} in this folder.`);
+          return;
+        }
+        await fs.rm(file);
         console.log(`Removed ${PROFILE_FILE}.`);
       }),
     );

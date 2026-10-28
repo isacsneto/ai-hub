@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { adapterFor } from './adapters/index.js';
 import type { Candidate } from './discover.js';
-import { saveHub, timestamp, type Hub, type Profile } from './config.js';
+import { saveHub, timestamp, type Hub, type Profile, type ToolId } from './config.js';
 import type { Context } from './context.js';
 import { atomicWrite, ensureDir, isDirectory } from './fsx.js';
 import { contractHome } from './paths.js';
@@ -13,6 +13,40 @@ export function getProfile(hub: Hub, id: string): Profile {
     throw new Error(`No profile "${id}". Known profiles: ${known}`);
   }
   return p;
+}
+
+/** Product name used in default labels, and the id words that only repeat it. */
+const LABEL_NAMES: Record<ToolId, { name: string; words: string[] }> = {
+  'claude-code': { name: 'Claude Code', words: ['claude', 'code', 'cc'] },
+  'claude-desktop': { name: 'Claude', words: ['claude', 'desktop', 'desk', 'app'] },
+  codex: { name: 'Codex', words: ['codex', 'cli'] },
+  'codex-desktop': { name: 'ChatGPT', words: ['codex', 'chatgpt', 'gpt', 'desktop', 'app'] },
+  cursor: { name: 'Cursor', words: ['cursor'] },
+  browser: { name: 'Browser', words: ['browser', 'web'] },
+};
+
+const SITE_NAMES: Record<string, string> = {
+  'chatgpt.com': 'ChatGPT', 'chat.openai.com': 'ChatGPT', 'claude.ai': 'Claude', 'gemini.google.com': 'Gemini',
+  'copilot.microsoft.com': 'Copilot', 'perplexity.ai': 'Perplexity', 'www.perplexity.ai': 'Perplexity',
+};
+
+/** A readable name for a new profile: ("claude-code", "claude-work") → "Claude Code · Work". */
+export function defaultLabel(tool: ToolId, id: string, url?: string): string {
+  let { name, words } = LABEL_NAMES[tool];
+  if (tool === 'browser' && url) {
+    const host = URL.canParse(url) ? new URL(url).hostname : '';
+    const site = SITE_NAMES[host] ?? host.replace(/^www\./, '').split('.')[0] ?? '';
+    if (site) {
+      name = site.charAt(0).toUpperCase() + site.slice(1);
+      words = [...words, name.toLowerCase()];
+    }
+  }
+  const rest = id
+    .split(/[-_.\s]+/)
+    .filter((w) => w && !words.includes(w.toLowerCase()))
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+  return rest ? `${name} · ${rest}` : name;
 }
 
 export function profileRoot(ctx: Context, p: Profile): string {

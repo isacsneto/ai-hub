@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useState } from 'react';
 import { api, errorText, type Matrix, type Plan } from '../api';
 import type { Notify } from '../App';
-import { Button, Chip, Dialog, Empty, PageHeader, ProfileIcon } from '../components/ui';
+import { Button, Chip, Dialog, Empty, PageHeader, ProfileIcon, plural } from '../components/ui';
 
 type Row = Matrix['rows'][number];
 type Kind = Row['kind'];
@@ -81,7 +81,7 @@ export function SharingPage({ notify }: { notify: Notify }) {
       const plans = await api.applyAll();
       const done = plans.flatMap((p) => p.actions).filter((a) => a.status === 'done').length;
       const stuck = plans.flatMap((p) => p.actions).filter((a) => ['blocked', 'conflict', 'failed'].includes(a.status)).length;
-      notify(`${done} change(s) applied${stuck ? `, ${stuck} need attention` : ''}.`, stuck ? 'info' : 'ok');
+      notify(`${plural(done, 'change')} applied${stuck ? `, ${stuck} need attention` : ''}.`, stuck ? 'info' : 'ok');
     } catch (e) {
       notify(errorText(e), 'bad');
     } finally {
@@ -92,12 +92,15 @@ export function SharingPage({ notify }: { notify: Notify }) {
 
   const undo = async () => {
     const r = await api.undo().catch((e) => (notify(errorText(e), 'bad'), null));
-    notify(r ? `Undid "${r.label}" (${r.reverted} change(s)).` : 'Nothing to undo.', r ? 'ok' : 'info');
+    notify(r ? `Undid "${r.label}" (${plural(r.reverted, 'change')}).` : 'Nothing to undo.', r ? 'ok' : 'info');
     load();
   };
 
   if (!matrix) return <PageHeader title="Sharing" subtitle="Loading…" />;
   const kinds = [...new Set(matrix.rows.map((r) => r.kind))];
+  // Profiles whose tool can't take any library item (browser, Cursor) only add columns of dashes.
+  const columns = matrix.profiles.filter((p) => matrix.rows.some((r) => matrix.cells[p.id]?.[`${r.kind}/${r.name}`]?.supported));
+  const hidden = matrix.profiles.filter((p) => !columns.includes(p));
   const pendingCount = Object.values(matrix.cells).flatMap((c) => Object.values(c)).filter((c) => c.status === 'pending').length;
 
   return (
@@ -107,7 +110,7 @@ export function SharingPage({ notify }: { notify: Notify }) {
         subtitle="Tick what each profile should get from the library. Everything else stays private to the profile."
         actions={
           <>
-            <Button variant="ghost" onClick={undo} disabled={busy}>
+            <Button onClick={undo} disabled={busy}>
               Undo last change
             </Button>
             <Button variant="primary" onClick={applyAll} disabled={busy || !pendingCount}>
@@ -119,7 +122,7 @@ export function SharingPage({ notify }: { notify: Notify }) {
 
       {matrix.everyone.map((e) => (
         <div key={e.path} className="mb-3 rounded-lg border border-warn/40 bg-warn/10 px-3 py-2 text-[12.5px]">
-          <span className="font-semibold">{e.path}</span> · {e.entries.length} item(s) · {e.note}
+          <span className="font-semibold">{e.path}</span> · {plural(e.entries.length, 'item')} · {e.note}
         </div>
       ))}
 
@@ -131,13 +134,15 @@ export function SharingPage({ notify }: { notify: Notify }) {
             <thead>
               <tr className="border-b border-line">
                 <th className="sticky left-0 z-10 min-w-64 bg-panel px-3 py-2 text-left font-medium text-muted">Library item</th>
-                {matrix.profiles.map((p) => (
+                {columns.map((p) => (
                   <th key={p.id} className="min-w-28 px-2 py-2 font-medium">
-                    <div className="flex flex-col items-center gap-1">
+                    <div className="flex flex-col items-center gap-1" title={p.label}>
                       <ProfileIcon id={p.id} size={28} />
-                      <span className="max-w-28 truncate" title={p.label}>
-                        {p.label}
-                      </span>
+                      {/* "Claude Code · Work" → "Work" over a smaller "Claude Code" so narrow columns stay readable. */}
+                      <span className="max-w-32 truncate leading-tight">{p.label.split(' · ').slice(1).join(' · ') || p.label}</span>
+                      {p.label.includes(' · ') && (
+                        <span className="max-w-32 truncate text-[10.5px] leading-tight font-normal text-muted">{p.label.split(' · ')[0]}</span>
+                      )}
                     </div>
                   </th>
                 ))}
@@ -147,7 +152,7 @@ export function SharingPage({ notify }: { notify: Notify }) {
               {kinds.map((kind) => (
                 <Fragment key={kind}>
                   <tr>
-                    <td colSpan={matrix.profiles.length + 1} className="bg-bg/60 px-3 py-1 text-[11px] font-semibold tracking-wide text-muted uppercase">
+                    <td colSpan={columns.length + 1} className="bg-bg/60 px-3 py-1 text-[11px] font-semibold tracking-wide text-muted uppercase">
                       {KIND_LABEL[kind]}
                     </td>
                   </tr>
@@ -163,7 +168,7 @@ export function SharingPage({ notify }: { notify: Notify }) {
                           </div>
                           {row.description && <div className="max-w-80 truncate text-[11.5px] text-muted">{row.description}</div>}
                         </td>
-                        {matrix.profiles.map((p) => {
+                        {columns.map((p) => {
                           const cell = matrix.cells[p.id]?.[`${row.kind}/${row.name}`];
                           if (!cell?.supported) {
                             return (
@@ -205,6 +210,12 @@ export function SharingPage({ notify }: { notify: Notify }) {
         ))}
         <span>– not supported by that tool (hover for why)</span>
       </div>
+      {!!matrix.rows.length && hidden.length > 0 && (
+        <p className="mt-2 text-[11.5px] text-muted">
+          Not shown: {hidden.map((p) => p.label).join(', ')}. {hidden.length === 1 ? 'Its tool keeps' : 'Their tools keep'} skills and instructions in the app or account,
+          so there's nothing to share into {hidden.length === 1 ? 'it' : 'them'}.
+        </p>
+      )}
 
       {confirmMcp && (
         <Dialog title={`Allow MCP servers for ${confirmMcp.profileId}?`} onClose={() => setConfirmMcp(undefined)}>

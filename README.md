@@ -70,7 +70,7 @@ How each item gets into a profile:
 
 | | Claude Code | Codex |
 |---|---|---|
-| skills | symlink | managed copy (link loading isn't verified yet) |
+| skills | symlink | symlink (verified in Phase 0) |
 | agents / commands | symlink | commands → copied into `prompts/` |
 | instructions | `@import` lines in a managed block in `CLAUDE.md` | copied into a managed block in `AGENTS.md` |
 | plugins | installed separately in each profile (`claude plugin install`) | not managed |
@@ -78,7 +78,9 @@ How each item gets into a profile:
 
 Safety rules:
 - **It only removes what it put there.** The hub records every item it places in `~/.aihub/state/` and never touches anything without such a record. A copy you edited is left alone unless you pass `--force`.
-- **Every change can be undone.** Changes happen in one transaction: replaced or removed things are moved into `~/.aihub/journal/`, a failed run rolls back, and `aihub undo` reverses the last run.
+- **Every change can be undone.** Changes happen in one transaction: replaced or removed things are moved into `~/.aihub/journal/`, a failed run rolls back, and `aihub undo` reverses the last run. The journal is written as changes happen, so a run cut short can be undone too. Undo leaves alone any file you edited after the hub wrote it, and says so.
+- **Linked files stay linked.** If `CLAUDE.md` or `settings.json` is a symlink (into dotfiles, say), the hub won't replace it with a file; it reports a conflict instead. A managed block with damaged markers is also left for you to fix.
+- **One change at a time.** The app and the CLI share a lock in `~/.aihub`, so two changes never interleave.
 - **Plugins that bring MCP servers wait for approval.** The hub reads the plugin's marketplace files on disk; nothing is downloaded. Plugins with MCP servers, or with files it can't read offline, need `--allow-mcp` for each profile.
 - **Folders owned by other tools are read-only.** Profiles managed by another tool (cpm, claude-account-guard) are only read until `aihub takeover`, which can be reversed with `--undo`.
 - **Whole-folder links (cpm's `share = ["skills"]`) aren't silently replaced.** Switching to per-item links needs `--detach`.
@@ -107,7 +109,7 @@ Exports never include profile folders, logins or the journal.
 
 ## What has been verified
 
-`packages/core/src/adapters/tested.ts` records what was tested, and on which version. `aihub doctor` and the Health page warn when a tool is newer than that. To fill the remaining gaps (Codex symlinked skills, `~/.agents/skills`, a second ChatGPT app instance, Cursor), run this from a normal Terminal:
+`packages/core/src/adapters/tested.ts` records what was tested, and on which version. `aihub doctor` and the Health page warn when a tool is newer than that. To re-check after a tool update, run this from a normal Terminal:
 
 ```sh
 scripts/phase0-remaining.sh

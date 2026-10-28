@@ -29,5 +29,5 @@ export { BROWSER_APPS } from './browser.js';
 export { defaultCursorDataDir } from './cursor.js';
 export { claudeKeychainService } from './claude-code.js';
 export { defaultDesktopDataDir } from './claude-desktop.js';
-export { TESTED } from './tested.js';
+export { isolationFor, TESTED, usesGlobalDirs } from './tested.js';
 export type * from './types.js';

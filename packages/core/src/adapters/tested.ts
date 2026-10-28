@@ -1,5 +1,5 @@
-import type { ToolId } from '../config.js';
-import type { TestedCapabilities } from './types.js';
+import type { Profile, ToolId } from '../config.js';
+import type { Evidence, TestedCapabilities } from './types.js';
 
 /**
  * What has actually been verified, per tool and version (Phase 0, run on macOS 15 / Darwin 24.6).
@@ -97,3 +97,19 @@ export const TESTED: Record<ToolId, TestedCapabilities> = {
     notes: ['Chromium --user-data-dir gives each profile its own cookies, logins and history.'],
   },
 };
+
+/** Whether a profile reads its tool's every-profile folders (globalSkillDirs). Cursor's isolated HOME moves ~/.cursor. */
+export function usesGlobalDirs(p: Profile): boolean {
+  return !(p.tool === 'cursor' && p.homeMode === 'isolated');
+}
+
+/** Isolation evidence for one profile: the tool's, adjusted for profile options that change it. */
+export function isolationFor(p: Profile): { login: Evidence; mcp: Evidence; history: Evidence } {
+  const t = TESTED[p.tool];
+  return {
+    login: t.isolatedLogin,
+    // An isolated HOME gives Cursor its own ~/.cursor/mcp.json; that mode is still experimental.
+    mcp: t.isolatedMcp === 'no' && !usesGlobalDirs(p) ? 'assumed' : t.isolatedMcp,
+    history: t.isolatedHistory,
+  };
+}

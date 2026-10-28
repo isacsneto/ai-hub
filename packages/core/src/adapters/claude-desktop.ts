@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { ClaudeDesktopProfile } from '../config.js';
 import type { Context } from '../context.js';
+import { APP_ENV_STRIP, cleanEnv } from '../env.js';
 import { exists, readJsonIfExists } from '../fsx.js';
 import { resolvePath } from '../paths.js';
 import { readPlistString } from '../plist.js';
@@ -91,7 +92,7 @@ export const claudeDesktop: ToolAdapter<ClaudeDesktopProfile> = {
 
     const appArgs = [...(paths.isDefault ? [] : [`--user-data-dir=${paths.root}`]), ...args];
     if (appArgs.length) openArgs.push('--args', ...appArgs);
-    return { command: '/usr/bin/open', args: openArgs, env: ctx.env };
+    return { command: '/usr/bin/open', args: openArgs, env: cleanEnv(ctx.env, APP_ENV_STRIP) };
   },
 
   async looksLikeRoot(dir) {

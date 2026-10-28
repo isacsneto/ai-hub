@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { CursorProfile } from '../config.js';
 import type { Context } from '../context.js';
+import { APP_ENV_STRIP, cleanEnv } from '../env.js';
 import { exists, readJsonIfExists } from '../fsx.js';
 import { resolvePath } from '../paths.js';
 import { readPlistString } from '../plist.js';
@@ -107,7 +108,7 @@ export const cursor: ToolAdapter<CursorProfile> = {
       ...(p.extensionsDir ? [`--extensions-dir=${resolvePath(p.extensionsDir, ctx.home)}`] : []),
       ...args,
     ];
-    return { command: '/usr/bin/open', args: [...open, ...(appArgs.length ? ['--args', ...appArgs] : [])], env: ctx.env };
+    return { command: '/usr/bin/open', args: [...open, ...(appArgs.length ? ['--args', ...appArgs] : [])], env: cleanEnv(ctx.env, APP_ENV_STRIP) };
   },
 
   async looksLikeRoot(dir) {

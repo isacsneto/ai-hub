@@ -1,4 +1,4 @@
-import { adapterFor, TESTED } from './adapters/index.js';
+import { adapterFor, TESTED, usesGlobalDirs } from './adapters/index.js';
 import type { Hub } from './config.js';
 import type { Context } from './context.js';
 import { listEntries } from './fsx.js';
@@ -64,7 +64,7 @@ export async function sharingMatrix(ctx: Context, hub: Hub): Promise<SharingMatr
   }
 
   const everyone: SharingMatrix['everyone'] = [];
-  for (const tool of new Set(hub.profiles.map((p) => p.tool))) {
+  for (const tool of new Set(hub.profiles.filter(usesGlobalDirs).map((p) => p.tool))) {
     for (const g of TESTED[tool].globalSkillDirs) {
       const entries = (await listEntries(resolvePath(g.path, ctx.home))).map((e) => e.name);
       if (entries.length) everyone.push({ tool, path: contractHome(resolvePath(g.path, ctx.home), ctx.home), entries, note: g.note });

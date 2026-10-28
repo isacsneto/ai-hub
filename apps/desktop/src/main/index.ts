@@ -11,19 +11,24 @@ import {
   discover,
   doctor,
   getLibraryItem,
+  ITEM_KINDS,
+  SHARE_KINDS,
   getProfile,
+  isolationFor,
   launchProfile,
   loadHub,
   mainFile,
   readPlistString,
   reconcile,
   reconcileAll,
+  relabelProfile,
   renderIcon,
   saveHub,
   setSharing,
   sharingMatrix,
   takeover,
   undoLast,
+  withHubLock,
   type ItemKind,
   type Profile,
   type ShareKind,
@@ -45,9 +50,10 @@ let updateStatus: UpdateStatus = { state: 'idle', current: app.getVersion() };
 let latestRelease: Release | undefined;
 
 function setUpdateStatus(next: UpdateStatus) {
+  const changed = next.state !== updateStatus.state;
   updateStatus = next;
   for (const w of BrowserWindow.getAllWindows()) w.webContents.send('aihub:update', next);
-  void refreshTray();
+  if (changed) void refreshTray();
 }
 
 async function checkUpdates(): Promise<UpdateStatus> {
@@ -61,7 +67,9 @@ async function checkUpdates(): Promise<UpdateStatus> {
     setUpdateStatus(
       r.available && r.release
         ? { state: 'available', current, latest: r.latest!, notes: r.release.body ?? '', url: r.release.html_url, checkedAt }
-        : { state: 'up-to-date', current, checkedAt },
+        : r.missingBuild
+          ? { state: 'error', current, message: `AI-Hub ${r.latest} is out, but has no build for this Mac (${process.arch}) yet.` }
+          : { state: 'up-to-date', current, checkedAt },
     );
   } catch (err) {
     setUpdateStatus({ state: 'error', current, message: (err as Error).message });
@@ -96,6 +104,11 @@ async function installCli(): Promise<string> {
   return contractHome(CLI_SHIM, ctx.home);
 }
 
+/** IPC arguments are only typed at compile time; a kind ends up in a library path, so check it. */
+function assertKind(kind: unknown, allowed: readonly string[]): void {
+  if (typeof kind !== 'string' || !allowed.includes(kind)) throw new Error(`Unknown kind "${String(kind)}".`);
+}
+
 const dataUrl = (png: Buffer) => `data:image/png;base64,${png.toString('base64')}`;
 
 type IconPatch = NonNullable<Profile['icon']>;
@@ -112,11 +125,7 @@ const api = {
           toolName: adapter.displayName,
           identity: await adapter.identity(ctx, p),
           folder: contractHome(adapter.paths(ctx, p).root, ctx.home),
-          tested: {
-            login: adapter.tested.isolatedLogin,
-            mcp: adapter.tested.isolatedMcp,
-            history: adapter.tested.isolatedHistory,
-          },
+          tested: isolationFor(p),
         };
       }),
     );
@@ -137,10 +146,14 @@ const api = {
   },
 
   async setShare(req: { kind: ShareKind; name: string; profileId: string; on: boolean; allowMcp?: boolean; detach?: boolean; force?: boolean }) {
-    const hub = await loadHub(ctx);
-    const [p] = await setSharing(ctx, hub, req.kind, req.name, [req.profileId], req.on, { allowMcp: req.allowMcp });
-    await saveHub(ctx, hub);
-    return reconcile(ctx, hub, p!, { detach: req.detach, force: req.force });
+    assertKind(req?.kind, SHARE_KINDS);
+    // Read, change, save and apply as one step, so a quick second click works on the first one's result.
+    return withHubLock(ctx, async () => {
+      const hub = await loadHub(ctx);
+      const [p] = await setSharing(ctx, hub, req.kind, req.name, [req.profileId], req.on, { allowMcp: req.allowMcp });
+      await saveHub(ctx, hub);
+      return reconcile(ctx, hub, p!, { detach: req.detach, force: req.force });
+    });
   },
 
   async applyAll(opts: { detach?: boolean; force?: boolean } = {}) {
@@ -156,10 +169,12 @@ const api = {
   },
 
   async itemText(kind: ItemKind, name: string) {
+    assertKind(kind, ITEM_KINDS);
     return fs.readFile(mainFile(await getLibraryItem(ctx, kind, name)), 'utf8');
   },
 
   async addLibraryItem(kind: ItemKind) {
+    assertKind(kind, ITEM_KINDS);
     const win = BrowserWindow.getFocusedWindow();
     const opts: Electron.OpenDialogOptions =
       kind === 'skills'
@@ -174,7 +189,7 @@ const api = {
   async updateProfile(id: string, patch: { label?: string; icon?: IconPatch }) {
     const hub = await loadHub(ctx);
     const p = getProfile(hub, id);
-    if (patch.label?.trim()) p.label = patch.label.trim();
+    if (patch.label?.trim()) await relabelProfile(ctx, hub, p, patch.label);
     if (patch.icon) p.icon = { ...p.icon, ...patch.icon };
     await saveHub(ctx, hub);
     refreshTray();
@@ -242,11 +257,15 @@ const api = {
 
   async installUpdate() {
     if (!app.isPackaged) throw new Error('Updates only apply to the packaged app.');
+    if (updateStatus.state === 'downloading' || updateStatus.state === 'installing') return; // a second click
     if (updateStatus.state !== 'available' || !latestRelease) throw new Error('No update is ready to install.');
     const { current, latest } = updateStatus;
+    // Claim the install before the first await, so a second click (window or tray) can't start another.
+    setUpdateStatus({ state: 'downloading', current, latest, received: 0, total: 0 });
+    let lastProgress = 0;
     const bundleId = await readPlistString(ctx, path.resolve(process.execPath, '../../Info.plist'), 'CFBundleIdentifier');
-    if (!bundleId) throw new Error("Can't read this app's bundle id.");
     try {
+      if (!bundleId) throw new Error("Can't read this app's bundle id.");
       await downloadAndInstall({
         ctx,
         release: latestRelease,
@@ -254,7 +273,12 @@ const api = {
         execPath: process.execPath,
         bundleId,
         relaunch: process.env.AIHUB_UPDATE_NO_RELAUNCH !== '1',
-        onProgress: (received, total) => setUpdateStatus({ state: 'downloading', current, latest, received, total }),
+        onProgress: (received, total) => {
+          // A download has thousands of chunks; a few updates a second is plenty for the progress bar.
+          if (Date.now() - lastProgress < 250 && received < total) return;
+          lastProgress = Date.now();
+          setUpdateStatus({ state: 'downloading', current, latest, received, total });
+        },
         quit: () => {
           setUpdateStatus({ state: 'installing', current, latest });
           setTimeout(() => app.quit(), 300);
@@ -282,7 +306,14 @@ export type AihubApi = { [K in keyof typeof api]: (typeof api)[K] };
 // The preload exposes exactly API_METHODS; make sure the two lists agree.
 const exposed: readonly (keyof typeof api)[] = API_METHODS;
 for (const name of exposed) {
-  ipcMain.handle(`aihub:${name}`, (_event, ...args: unknown[]) => (api[name] as (...a: unknown[]) => unknown)(...args));
+  ipcMain.handle(`aihub:${name}`, (event, ...args: unknown[]) => {
+    // Only our own page may call in (defense in depth: the window never navigates elsewhere).
+    const url = event.senderFrame?.url ?? '';
+    if (!url.startsWith('file://') && !(process.env.ELECTRON_RENDERER_URL && url.startsWith(process.env.ELECTRON_RENDERER_URL))) {
+      throw new Error('Refused: request from an unexpected page.');
+    }
+    return (api[name] as (...a: unknown[]) => unknown)(...args);
+  });
 }
 
 let tray: Tray | undefined;
@@ -390,6 +421,10 @@ function setAppMenu() {
     ]),
   );
 }
+
+// One copy at a time: a second launch just brings the first window forward.
+if (!SMOKE && !app.requestSingleInstanceLock()) app.exit(0);
+app.on('second-instance', () => (win ? (win.show(), win.focus()) : createWindow()));
 
 app.whenReady().then(() => {
   setAppMenu();

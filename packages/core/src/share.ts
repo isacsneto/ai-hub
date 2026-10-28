@@ -14,12 +14,15 @@ import {
   loadCatalog,
   loadSharedSettings,
   mainFile,
+  SHAREABLE_SETTINGS,
   type LibraryItem,
   type PluginEntry,
   type ShareKind,
 } from './library.js';
+import { withHubLock } from './lock.js';
 import { previewPluginMcp } from './plugins.js';
 import { loadState, recordKey, saveState, stateFile, type InstallRecord } from './state.js';
+import { plural } from './text.js';
 import { withTransaction, type Transaction } from './tx.js';
 
 export type ActionType =
@@ -75,6 +78,18 @@ interface Step extends Action {
 const BEGIN = '<!-- aihub:begin: managed by AI-Hub, change with `aihub share`/`aihub unshare` -->';
 const END = '<!-- aihub:end -->';
 
+/**
+ * Why the file's managed block can't be safely rewritten, if it can't: markers must come as exactly
+ * one begin followed by one end, or none at all. Anything else would make a rewrite eat user text.
+ */
+export function blockProblem(text: string): string | undefined {
+  const begins = text.split(BEGIN).length - 1;
+  const ends = text.split(END).length - 1;
+  if (begins === 0 && ends === 0) return undefined;
+  if (begins === 1 && ends === 1 && text.indexOf(BEGIN) < text.indexOf(END)) return undefined;
+  return 'its AI-Hub block markers are missing, repeated or out of order; fix or delete the block by hand, then apply again';
+}
+
 /** Replace, add or drop the hub's managed block, leaving the rest of the file as it is. */
 export function replaceBlock(text: string, body: string | undefined): string {
   const start = text.indexOf(BEGIN);
@@ -96,11 +111,28 @@ const now = () => new Date().toISOString();
 
 const isLinkedFolder = async (dir: string) => (await symlinkTargetOf(dir)) !== undefined;
 
+/** Files the hub rewrites must be real files: writing would turn a link (into dotfiles, say) into a copy. */
+async function linkedFileReason(file: string): Promise<string | undefined> {
+  const to = await symlinkTargetOf(file);
+  return to ? `${path.basename(file)} is a link to ${to}; the hub won't replace it with a file (make it a regular file to share here)` : undefined;
+}
+
+/** Whether an install record points inside the profile; anything else (a stale or edited record) is never touched. */
+const insideProfile = (ctx: Context, p: Profile, file: string) => {
+  const root = adapterFor(p).paths(ctx, p).root;
+  return path.resolve(file).startsWith(root + path.sep);
+};
+
 /**
  * Make a profile's folder match its `sharing` choices. Plans first; unless dryRun, applies the plan
  * in a transaction. Only things recorded in the hub's state are ever removed or replaced.
  */
 export async function reconcile(ctx: Context, hub: Hub, p: Profile, opts: ReconcileOptions = {}): Promise<Plan> {
+  // Plan and apply under one lock, so a second change can't act on a plan made before the first applied.
+  return opts.dryRun ? reconcileUnlocked(ctx, hub, p, opts) : withHubLock(ctx, () => reconcileUnlocked(ctx, hub, p, opts));
+}
+
+async function reconcileUnlocked(ctx: Context, hub: Hub, p: Profile, opts: ReconcileOptions): Promise<Plan> {
   const adapter = adapterFor(p);
   const sharing = p.sharing ?? {};
   const state = await loadState(ctx, p.id);
@@ -157,7 +189,9 @@ export async function reconcile(ctx: Context, hub: Hub, p: Profile, opts: Reconc
   for (const r of state.installs) {
     if (r.kind === 'instructions' && !blocks.has(r.path)) blocks.set(r.path, { style: 'import', items: [] });
   }
-  for (const [file, { style, items }] of blocks) steps.push(await planBlock(file, style, items));
+  for (const [file, { style, items }] of blocks) {
+    steps.push(insideProfile(ctx, p, file) ? await planBlock(file, style, items) : { type: 'forget', kind: 'instructions', name: '(block)', path: file, status: 'pending', reason: 'recorded outside the profile; left alone', replaceRecords: { kind: 'instructions', file, records: [] }, run: async () => {} });
+  }
 
   // ---- settings.json keys ----
   const keys = sharing.settings ?? [];
@@ -183,7 +217,7 @@ export async function reconcile(ctx: Context, hub: Hub, p: Profile, opts: Reconc
   // ---- recorded items that are no longer wanted ----
   for (const r of state.installs) {
     if (wantedKeys.has(recordKey(r)) || r.kind === 'instructions' || r.kind === 'settings') continue;
-    steps.push(r.kind === 'plugins' ? planPluginRemoval(ctx, p, r) : await planRemoval(ctx, r, opts));
+    steps.push(r.kind === 'plugins' ? planPluginRemoval(ctx, p, r) : await planRemoval(ctx, p, r, opts));
   }
 
   // ---- a folder that is one big symlink (cpm) has to become a real folder first ----
@@ -210,7 +244,7 @@ export async function reconcile(ctx: Context, hub: Hub, p: Profile, opts: Reconc
     for (const s of steps) {
       if (s.status === 'pending' && s.path && path.dirname(s.path) === dir) {
         s.status = 'blocked';
-        s.reason = `${path.basename(dir)}/ is one link to ${to}; --detach switches it to per-item links (the ${visible.length} item(s) now visible through it would stop showing)`;
+        s.reason = `${path.basename(dir)}/ is one link to ${to}; --detach switches it to per-item links (the ${plural(visible.length, 'item')} now visible through it would stop showing)`;
       }
     }
   }
@@ -266,9 +300,10 @@ async function planCopy(item: LibraryItem, at: string, rec: InstallRecord | unde
   };
 }
 
-async function planRemoval(ctx: Context, r: InstallRecord, opts: ReconcileOptions): Promise<Step> {
+async function planRemoval(ctx: Context, p: Profile, r: InstallRecord, opts: ReconcileOptions): Promise<Step> {
   const base = { type: 'remove' as const, kind: r.kind, name: r.name, path: r.path };
   const forget = (reason: string): Step => ({ ...base, type: 'forget', status: 'pending', reason, record: null, run: async () => {} });
+  if (!insideProfile(ctx, p, r.path)) return forget('recorded outside the profile folder; left alone');
   // Never reach through a whole-folder link into another profile's folder.
   if (await isLinkedFolder(path.dirname(r.path))) return forget('its folder is now a link to elsewhere; left alone');
   const st = await fs.lstat(r.path).catch(() => undefined);
@@ -286,7 +321,10 @@ async function planRemoval(ctx: Context, r: InstallRecord, opts: ReconcileOption
 }
 
 async function planBlock(file: string, style: 'import' | 'inline', items: LibraryItem[]): Promise<Step> {
+  const name = items.map((i) => i.name).join(', ') || '(removing block)';
   const text = (await readTextIfExists(file)) ?? '';
+  const problem = (await linkedFileReason(file)) ?? blockProblem(text);
+  if (problem) return { type: 'write-block', kind: 'instructions', name, path: file, status: 'conflict', reason: problem };
   let body: string | undefined;
   if (items.length && style === 'import') body = items.map((i) => `@${mainFile(i)}`).join('\n');
   else if (items.length) {
@@ -296,7 +334,7 @@ async function planBlock(file: string, style: 'import' | 'inline', items: Librar
   }
   const next = replaceBlock(text, body);
   return {
-    type: 'write-block', kind: 'instructions', name: items.map((i) => i.name).join(', ') || '(removing block)', path: file,
+    type: 'write-block', kind: 'instructions', name, path: file,
     status: next === text ? 'ok' : 'pending',
     run: (tx) => tx.write(file, next),
     replaceRecords: {
@@ -314,6 +352,8 @@ async function planSettings(
   opts: ReconcileOptions,
 ): Promise<Step[]> {
   const base = (name: string) => ({ type: 'write-settings' as const, kind: 'settings' as const, name, path: file });
+  const linked = await linkedFileReason(file);
+  if (linked) return keys.map((k) => ({ ...base(k), status: 'conflict', reason: linked }));
   let current: Record<string, unknown>;
   try {
     current = ((await readJsonIfExists(file)) as Record<string, unknown> | undefined) ?? {};
@@ -325,13 +365,19 @@ async function planSettings(
   const keep: InstallRecord[] = [];
   for (const key of keys) {
     const rec = prior.find((r) => r.name === key);
-    if (!(key in shared)) {
+    // The allowlist is enforced here too: library/settings.json can be hand-edited or restored.
+    if (!(SHAREABLE_SETTINGS as readonly string[]).includes(key)) {
+      steps.push({ ...base(key), status: 'conflict', reason: `"${key}" isn't a shareable setting` });
+      if (rec) keep.push(rec);
+      continue;
+    }
+    if (!Object.hasOwn(shared, key)) {
       steps.push({ ...base(key), status: 'conflict', reason: 'not set in the library (`aihub setting set`)' });
       if (rec) keep.push(rec);
       continue;
     }
     const record: InstallRecord = { kind: 'settings', name: key, strategy: 'json-key', path: file, hash: valueHash(shared[key]), installedAt: now() };
-    const has = key in current;
+    const has = Object.hasOwn(current, key);
     if (has && valueHash(current[key]) === record.hash) {
       steps.push(rec ? { ...base(key), status: 'ok' } : { ...base(key), type: 'adopt', status: 'pending' });
       keep.push(record);
@@ -345,7 +391,7 @@ async function planSettings(
     }
   }
   for (const r of prior.filter((r) => !keys.includes(r.name))) {
-    if (r.name in current && valueHash(current[r.name]) === r.hash) {
+    if (Object.hasOwn(current, r.name) && valueHash(current[r.name]) === r.hash) {
       delete next[r.name];
       steps.push({ ...base(r.name), status: 'pending', reason: 'no longer shared: removing the key' });
     } else {
@@ -423,7 +469,7 @@ async function execute(ctx: Context, p: Profile, steps: Step[], installs: Instal
       for (const s of fileSteps) await s.run!(tx);
       for (const s of fileSteps) commitRecords(s);
       // Records are part of the transaction, so rollback and `aihub undo` restore them too.
-      await tx.write(stateFile(ctx, p.id), JSON.stringify({ version: 1, installs: [...map.values()] }, null, 2) + '\n');
+      await tx.write(stateFile(ctx, p.id), JSON.stringify({ version: 1, installs: [...map.values()] }, null, 2) + '\n', { records: true });
     });
     for (const s of fileSteps) s.status = 'done';
   }

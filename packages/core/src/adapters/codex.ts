@@ -2,7 +2,7 @@ import path from 'node:path';
 import { parse as parseToml } from 'smol-toml';
 import type { CodexProfile } from '../config.js';
 import { findExecutable, type Context } from '../context.js';
-import { cleanEnv } from '../env.js';
+import { CODEX_ENV_STRIP, cleanEnv } from '../env.js';
 import { exists, listEntries, readTextIfExists, symlinkTargetOf } from '../fsx.js';
 import { resolvePath } from '../paths.js';
 import { TESTED } from './tested.js';
@@ -11,7 +11,7 @@ import type { Identity, Inventory, ProfilePaths, ShareTarget, ToolAdapter } from
 /** The Codex CLI ships inside the ChatGPT app when it isn't installed on its own. */
 const BUNDLED_CODEX = '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex';
 
-export const CODEX_ENV_STRIP = [/^CODEX_/, /^OPENAI_API_KEY$/];
+export { CODEX_ENV_STRIP };
 
 async function readConfig(file: string): Promise<{ config?: Record<string, unknown>; error?: string }> {
   const text = await readTextIfExists(file);
@@ -94,7 +94,7 @@ export const codex: ToolAdapter<CodexProfile> = {
     if (!bin) throw new Error('Codex (`codex`) was not found on PATH or inside ChatGPT.app.');
     const paths = this.paths(ctx, p);
     const set = paths.isDefault ? {} : { CODEX_HOME: paths.root };
-    return { command: bin, args, env: cleanEnv(ctx.env, CODEX_ENV_STRIP, set) };
+    return { command: bin, args, env: cleanEnv(ctx.env, [...CODEX_ENV_STRIP, /^ELECTRON_RUN_AS_NODE$/], set) };
   },
 
   shareTarget(ctx, p, kind, name): ShareTarget {

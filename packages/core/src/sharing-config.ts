@@ -11,6 +11,7 @@ import {
   ITEM_KINDS,
   listLibrary,
   loadSharedSettings,
+  SHAREABLE_SETTINGS,
   type ItemKind,
   type ShareKind,
 } from './library.js';
@@ -25,7 +26,9 @@ const isListKind = (k: ShareKind): k is ListKey => k === 'skills' || k === 'agen
 async function assertExists(ctx: Context, kind: ShareKind, name: string): Promise<void> {
   if ((ITEM_KINDS as readonly string[]).includes(kind)) await getLibraryItem(ctx, kind as ItemKind, name);
   else if (kind === 'plugins') await getPluginEntry(ctx, name);
-  else if (!(name in (await loadSharedSettings(ctx)))) {
+  else if (!(SHAREABLE_SETTINGS as readonly string[]).includes(name)) {
+    throw new Error(`"${name}" can't be shared. Allowed: ${SHAREABLE_SETTINGS.join(', ')}.`);
+  } else if (!Object.hasOwn(await loadSharedSettings(ctx), name)) {
     throw new Error(`Setting "${name}" isn't in the library. Set it first: aihub setting set ${name} '<json>'`);
   }
 }

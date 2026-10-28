@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { adapterFor, adapterForTool } from './adapters/index.js';
+import { adapterFor, adapterForTool, usesGlobalDirs } from './adapters/index.js';
 import type { Identity } from './adapters/types.js';
 import type { Hub, Profile, ToolId } from './config.js';
 import type { Context } from './context.js';
@@ -8,6 +8,7 @@ import { listEntries, readTextIfExists } from './fsx.js';
 import { contractHome, resolvePath } from './paths.js';
 import { reconcile } from './share.js';
 import { loadState } from './state.js';
+import { plural } from './text.js';
 
 export type FindingLevel = 'ok' | 'info' | 'warn' | 'error';
 /**
@@ -113,17 +114,24 @@ export async function doctor(ctx: Context, hub: Hub, opts: { only?: string } = {
 
   // Per tool: binary, version vs. tested evidence, global folders.
   const versions: DoctorReport['versions'] = {};
-  for (const tool of new Set(profiles.map((p) => p.tool))) {
+  // Profiles can point at another app copy (`app`) or browser, so versions are checked per variant.
+  const variants = new Map<string, { tool: ToolId; profile: Profile; name: string }>();
+  for (const p of profiles) {
+    const which = 'browser' in p ? p.browser : 'app' in p && p.app ? path.basename(p.app, '.app') : '';
+    const key = `${p.tool}|${which}`;
+    if (!variants.has(key)) variants.set(key, { tool: p.tool, profile: p, name: adapterForTool(p.tool).displayName + (which ? ` (${which})` : '') });
+  }
+  for (const { tool, profile, name } of variants.values()) {
     const adapter = adapterForTool(tool);
-    const version = (await adapter.detectVersion(ctx)) ?? null;
-    versions[tool] = version;
+    const version = (await adapter.detectVersion(ctx, profile as never)) ?? null;
+    versions[tool] ??= version;
     const tested = adapter.tested;
     if (!version) {
-      add({ level: 'error', kind: 'state', tool, message: `${adapter.displayName} is not installed or not on PATH.` });
+      add({ level: 'error', kind: 'state', tool, message: `${name} is not installed or not on PATH.` });
     } else if (!tested.versions.length) {
-      add({ level: 'info', kind: 'untested', tool, message: `${adapter.displayName} ${version}: behavior is documented, not version-tested.` });
+      add({ level: 'info', kind: 'untested', tool, message: `${name} ${version}: behavior is documented, not version-tested.` });
     } else if (tested.versions.includes(version)) {
-      add({ level: 'ok', kind: 'untested', tool, message: `${adapter.displayName} ${version} matches the tested version.` });
+      add({ level: 'ok', kind: 'untested', tool, message: `${name} ${version} matches the tested version.` });
     } else {
       const newest = [...tested.versions].sort(compareVersions).at(-1)!;
       const newer = compareVersions(version, newest) > 0;
@@ -131,10 +139,14 @@ export async function doctor(ctx: Context, hub: Hub, opts: { only?: string } = {
         level: newer ? 'warn' : 'info',
         kind: 'untested',
         tool,
-        message: `${adapter.displayName} ${version} is ${newer ? 'newer' : 'older'} than the last tested version (${newest}); isolation results may differ.`,
+        message: `${name} ${version} is ${newer ? 'newer' : 'older'} than the last tested version (${newest}); isolation results may differ.`,
         hint: 'Re-run scripts/phase0-remaining.sh and update packages/core/src/adapters/tested.ts.',
       });
     }
+  }
+  for (const tool of new Set(profiles.map((p) => p.tool))) {
+    const adapter = adapterForTool(tool);
+    const tested = adapter.tested;
     if (tested.isolatedHistory !== 'tested') {
       add({
         level: 'info',
@@ -143,6 +155,7 @@ export async function doctor(ctx: Context, hub: Hub, opts: { only?: string } = {
         message: `${adapter.displayName}: history separation is ${tested.isolatedHistory} (separate folders), not yet checked with two accounts.`,
       });
     }
+    if (!profiles.some((p) => p.tool === tool && usesGlobalDirs(p))) continue;
     for (const g of tested.globalSkillDirs) {
       const entries = await listEntries(resolvePath(g.path, ctx.home));
       if (!entries.length) continue;
@@ -150,7 +163,7 @@ export async function doctor(ctx: Context, hub: Hub, opts: { only?: string } = {
         level: g.evidence === 'tested' ? 'info' : 'warn',
         kind: 'untested',
         tool,
-        message: `${g.path} holds ${entries.length} item(s) (${entries.map((e) => e.name).join(', ')}). ${g.note}`,
+        message: `${g.path} holds ${plural(entries.length, 'item')} (${entries.map((e) => e.name).join(', ')}). ${g.note}`,
       });
     }
   }
@@ -212,7 +225,7 @@ export async function doctor(ctx: Context, hub: Hub, opts: { only?: string } = {
       if (of('pending').length) {
         add({
           level: 'warn', kind: 'config', profile: p.id,
-          message: `${of('pending').length} sharing change(s) not applied yet: ${of('pending').map(label).join(', ')}.`,
+          message: `${plural(of('pending').length, 'sharing change')} not applied yet: ${of('pending').map(label).join(', ')}.`,
           hint: `aihub apply ${p.id}`,
         });
       }
@@ -220,7 +233,7 @@ export async function doctor(ctx: Context, hub: Hub, opts: { only?: string } = {
       for (const a of of('blocked')) add({ level: 'info', kind: 'config', profile: p.id, message: `${label(a)}: ${a.reason}` });
       for (const a of of('unsupported')) add({ level: 'info', kind: 'unsupported', profile: p.id, message: `${label(a)}: ${a.reason}` });
       if (plan.actions.length && plan.actions.every((a) => a.status === 'ok')) {
-        add({ level: 'ok', kind: 'config', profile: p.id, message: `All ${plan.actions.length} shared item(s) in place.` });
+        add({ level: 'ok', kind: 'config', profile: p.id, message: plan.actions.length === 1 ? 'The shared item is in place.' : `All ${plural(plan.actions.length, 'shared item')} in place.` });
       }
     }
 

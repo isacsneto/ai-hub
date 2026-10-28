@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { BrowserProfile } from '../config.js';
 import type { Context } from '../context.js';
+import { APP_ENV_STRIP, cleanEnv } from '../env.js';
 import { ensureDir, exists } from '../fsx.js';
 import { resolvePath } from '../paths.js';
 import { readPlistString } from '../plist.js';
@@ -71,7 +72,7 @@ export const browser: ToolAdapter<BrowserProfile> = {
     return {
       command: '/usr/bin/open',
       args: ['-n', '-a', app, '--args', `--user-data-dir=${root}`, '--no-first-run', '--no-default-browser-check', page, ...args],
-      env: ctx.env,
+      env: cleanEnv(ctx.env, APP_ENV_STRIP),
     };
   },
 

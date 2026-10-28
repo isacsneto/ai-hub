@@ -33,6 +33,10 @@ export async function restoreHub(ctx: Context, file: string, opts: { force?: boo
     !m.startsWith('/') && !m.split('/').includes('..') && INCLUDED.some((n) => m === n || m === `${n}/` || m.startsWith(`${n}/`));
   const bad = members.filter((m) => !allowed(m));
   if (bad.length) throw new Error(`Refusing archive with unexpected entries: ${bad.slice(0, 5).join(', ')}`);
+  // Links in an archive could point extraction (or later reads) outside the hub.
+  const verbose = await ctx.sys.run('/usr/bin/tar', ['-tvzf', file]);
+  const links = verbose.stdout.split('\n').filter((l) => /^[lh]/.test(l));
+  if (links.length) throw new Error(`Refusing archive with links: ${links.slice(0, 3).join('; ')}`);
 
   const keep = path.join(ctx.hubDir, 'backups', `${timestamp()}-before-restore`);
   await ensureDir(keep);
@@ -46,9 +50,14 @@ export async function restoreHub(ctx: Context, file: string, opts: { force?: boo
       if (await exists(path.join(keep, name))) await fs.rename(path.join(keep, name), path.join(ctx.hubDir, name));
     }
   };
-  const r = await ctx.sys.run('/usr/bin/tar', ['-xzf', file, '-C', ctx.hubDir]);
+  // The library's git config and hooks can run commands on the next commit, so they're never
+  // restored; `git init` below recreates a clean config while keeping the history.
+  const r = await ctx.sys.run('/usr/bin/tar', [
+    '-xzf', file, '-C', ctx.hubDir, '--exclude', 'library/.git/config', '--exclude', 'library/.git/hooks', '--exclude', 'library/.git/info',
+  ]);
   try {
     if (r.code !== 0) throw new Error(`tar failed: ${r.stderr.trim()}`);
+    if (await exists(path.join(ctx.hubDir, 'library/.git'))) await ctx.sys.run('git', ['-C', path.join(ctx.hubDir, 'library'), 'init', '-q']);
     parseHub((await readTextIfExists(hubFile(ctx))) ?? '', 'restored hub.yaml');
   } catch (err) {
     await putBack();

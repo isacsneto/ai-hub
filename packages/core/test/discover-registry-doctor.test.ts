@@ -5,7 +5,8 @@ import { claudeKeychainService } from '../src/adapters/claude-code.js';
 import { loadHub, saveHub, type Hub } from '../src/config.js';
 import { discover, GUARD_PLIST, shellAssignment } from '../src/discover.js';
 import { doctor } from '../src/doctor.js';
-import { adoptProfile, applyImport, removeProfile } from '../src/registry.js';
+import { adoptProfile, applyImport, defaultLabel, removeProfile } from '../src/registry.js';
+import { isolationFor } from '../src/adapters/tested.js';
 import { ctxFor, fakeSystem, tempHome, write } from './helpers.js';
 
 /** A home folder shaped like the real one: default ~/.claude, cpm profiles and a Claude Profiles app. */
@@ -68,6 +69,24 @@ describe('discover', () => {
     expect(work?.state).toBe('registered');
     const acme = found.find((c) => c.profile.tool === 'claude-desktop');
     expect(acme?.profile).toMatchObject({ codeProfile: 'my-work' });
+  });
+});
+
+describe('profile names and isolation', () => {
+  it('builds readable default labels from the tool and id', () => {
+    expect(defaultLabel('claude-code', 'claude-work')).toBe('Claude Code · Work');
+    expect(defaultLabel('codex', 'codex')).toBe('Codex');
+    expect(defaultLabel('cursor', 'side_project')).toBe('Cursor · Side Project');
+    expect(defaultLabel('browser', 'chatgpt-personal', 'https://chatgpt.com/')).toBe('ChatGPT · Personal');
+    expect(defaultLabel('browser', 'gem-work', 'https://www.example.org')).toBe('Example · Gem Work');
+    expect(defaultLabel('browser', 'x', 'not a url')).toBe('Browser · X');
+  });
+
+  it('only reports shared MCP for Cursor profiles that share ~/.cursor', () => {
+    const base = { id: 'c', tool: 'cursor', label: 'c', dataDir: '~/c' } as const;
+    expect(isolationFor({ ...base, homeMode: 'shared' }).mcp).toBe('no');
+    expect(isolationFor({ ...base, homeMode: 'isolated' }).mcp).toBe('assumed');
+    expect(isolationFor({ id: 'w', tool: 'claude-code', label: 'w', home: '~/w' }).mcp).toBe('tested');
   });
 });
 

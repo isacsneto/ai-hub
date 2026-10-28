@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, errorText, type Matrix } from '../api';
 import type { Notify } from '../App';
-import { Button, Chip, Empty, PageHeader } from '../components/ui';
+import { Button, Chip, Empty, PageHeader, ProfileIcon } from '../components/ui';
 
 type Row = Matrix['rows'][number];
 const FILE_KINDS = ['skills', 'agents', 'commands', 'instructions'] as const;
@@ -15,6 +15,12 @@ export function LibraryPage({ notify }: { notify: Notify }) {
     api.matrix().then(setMatrix).catch((e) => notify(errorText(e), 'bad'));
   }, [notify]);
   useEffect(load, [load]);
+
+  // Keep a selection so the detail panel is never empty: the first item, or the same item after a reload.
+  useEffect(() => {
+    if (!matrix?.rows.length) return setSelected(undefined);
+    setSelected((cur) => matrix.rows.find((r) => r.kind === cur?.kind && r.name === cur?.name) ?? matrix.rows[0]);
+  }, [matrix]);
 
   useEffect(() => {
     setText(undefined);
@@ -72,13 +78,21 @@ export function LibraryPage({ notify }: { notify: Notify }) {
                     <Chip>{row.kind.replace(/s$/, '')}</Chip>
                     <span className="truncate font-medium">{row.name}</span>
                   </div>
-                  {row.description && <div className="mt-0.5 truncate text-[11.5px] text-muted">{row.description}</div>}
+                  <div className="mt-0.5 flex items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate text-[11.5px] text-muted">{row.description}</span>
+                    <span className="flex shrink-0 gap-0.5" title={sharedWith(row).map((p) => p.label).join(', ') || 'Not shared yet'}>
+                      {sharedWith(row).length ? (
+                        sharedWith(row).map((p) => <ProfileIcon key={p.id} id={p.id} size={16} />)
+                      ) : (
+                        <span className="text-[11px] text-muted">not shared</span>
+                      )}
+                    </span>
+                  </div>
                 </button>
               );
             })}
           </div>
           <div className="min-w-0 rounded-xl border border-line bg-panel p-4">
-            {!selected && <div className="text-muted">Select an item to see it.</div>}
             {selected && (
               <>
                 <div className="mb-2 flex flex-wrap items-center gap-2">

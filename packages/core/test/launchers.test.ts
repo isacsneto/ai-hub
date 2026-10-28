@@ -3,7 +3,7 @@ import path from 'node:path';
 import sharp from 'sharp';
 import { describe, expect, it } from 'vitest';
 import type { Hub, Profile } from '../src/config.js';
-import { renderIcon } from '../src/icons.js';
+import { labelInitial, renderIcon } from '../src/icons.js';
 import { buildLauncher, removeLauncher } from '../src/launchers.js';
 import { findProfileFile, shellInit, writeProfileFile } from '../src/shell.js';
 import { ctxFor, executable, fakeSystem, tempHome, write } from './helpers.js';
@@ -79,6 +79,19 @@ describe('icons', () => {
     const plain: Profile = { id: 'b', tool: 'browser', browser: 'chrome', url: 'https://claude.ai', dataDir: '~/b', appWindow: true, label: 'Web', icon: { color: '#7C5CC4' } };
     const tile = await sharp(await renderIcon(ctx, plain, 128)).metadata();
     expect(tile).toMatchObject({ width: 128, height: 128, format: 'png' });
+  });
+
+  it('leaves the app icon alone until a badge or color is chosen', async () => {
+    const { home, cw } = await setup();
+    const ctx = ctxFor(home);
+    const plain = await sharp(await renderIcon(ctx, { ...cw, icon: { image: cw.icon!.image } }, 256)).raw().toBuffer();
+    expect([...plain.subarray((230 * 256 + 200) * 4, (230 * 256 + 200) * 4 + 3)]).toEqual([255, 136, 0]);
+  });
+
+  it('takes the badge letter from the distinguishing part of the label', () => {
+    expect(labelInitial('Claude Code · Work')).toBe('W');
+    expect(labelInitial('personal')).toBe('P');
+    expect(labelInitial('· ')).toBe('');
   });
 });
 

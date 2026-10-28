@@ -7,13 +7,15 @@ on:
     tags: ['v*']
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
+  build:
     runs-on: macos-15 # Apple Silicon
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false # npm install scripts run in this job; keep no token on disk
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -27,10 +29,28 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: bash apps/desktop/scripts/package-mac.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          path: |
+            apps/desktop/release/AI-Hub-*-mac.zip
+            apps/desktop/release/SHA256SUMS.txt
+          if-no-files-found: error
+
+  # Only this job can write to the repo, and it runs no project code or npm packages.
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            apps/desktop/release/AI-Hub-*-mac.zip apps/desktop/release/SHA256SUMS.txt \
+          gh release create "$GITHUB_REF_NAME" AI-Hub-*-mac.zip SHA256SUMS.txt \
             --title "AI-Hub ${GITHUB_REF_NAME#v}" --generate-notes

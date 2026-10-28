@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, errorText, type Candidate, type ProfileView } from '../api';
 import type { Notify } from '../App';
-import { Button, Chip, Dialog, Empty, PageHeader, ProfileIcon } from '../components/ui';
+import { Button, Chip, Dialog, Empty, PageHeader, ProfileIcon, labelInitial, plural } from '../components/ui';
 
 const COLORS = ['#3B7DD8', '#5DCAA5', '#E0A55E', '#7C5CC4', '#D25F8C', '#4CA9B2', '#6B7280'];
 
@@ -9,8 +9,9 @@ function AccountLine({ v }: { v: ProfileView }) {
   const id = v.identity;
   if (id.status === 'signed-in') return <span className="text-ok">{id.email ?? id.detail ?? 'Signed in'}</span>;
   if (id.status === 'signed-out') return <span className="text-warn">Not signed in{id.email ? ` (last: ${id.email})` : ''}</span>;
-  // App and browser profiles keep their login inside the app; the hub can't read who it is.
-  return <span className="text-muted">Login lives in the app</span>;
+  // Desktop apps keep their login in encrypted app storage, browser profiles on the website: the hub can't read who it is.
+  const text = v.profile.tool === 'claude-desktop' || !id.detail ? 'Login lives in the app' : id.detail.charAt(0).toUpperCase() + id.detail.slice(1);
+  return <span className="text-muted">{text}</span>;
 }
 
 export function ProfilesPage({ notify }: { notify: Notify }) {
@@ -36,7 +37,10 @@ export function ProfilesPage({ notify }: { notify: Notify }) {
   const buildLaunchers = async () => {
     const res = await api.buildLaunchers();
     const bad = res.filter((r) => r.error);
-    notify(bad.length ? `${bad.length} launcher(s) failed: ${bad[0]!.error}` : `Built ${res.length} launcher(s) in ~/Applications/AI-Hub`, bad.length ? 'bad' : 'ok');
+    notify(
+      bad.length ? `${plural(bad.length, 'launcher')} failed: ${bad[0]!.error}` : `Built ${plural(res.length, 'launcher')} in ~/Applications/AI-Hub`,
+      bad.length ? 'bad' : 'ok',
+    );
   };
 
   return (
@@ -67,7 +71,14 @@ export function ProfilesPage({ notify }: { notify: Notify }) {
                   {v.profile.tool === 'claude-desktop' && (
                     <Chip tone={v.profile.codeProfile ? 'neutral' : 'warn'}>Code tab → {v.profile.codeProfile ?? '~/.claude'}</Chip>
                   )}
-                  {v.tested.mcp === 'no' && <Chip tone="warn" title="This tool keeps MCP servers in a folder every profile shares">shared MCP</Chip>}
+                  {v.tested.mcp === 'no' && (
+                    <Chip tone="warn" title="This profile reads MCP servers from ~/.cursor, which every Cursor profile without its own home shares">
+                      shared MCP
+                    </Chip>
+                  )}
+                  {v.profile.tool === 'cursor' && v.profile.homeMode === 'isolated' && (
+                    <Chip title="Cursor runs with its own HOME, so ~/.cursor (MCP servers, skills) is separate. Experimental.">own home</Chip>
+                  )}
                 </div>
               </div>
             </div>
@@ -110,7 +121,7 @@ export function ProfilesPage({ notify }: { notify: Notify }) {
           onDone={(n) => {
             setImporting(false);
             load();
-            if (n) notify(`Imported ${n} profile(s). Nothing inside their folders changed.`, 'ok');
+            if (n) notify(`Imported ${plural(n, 'profile')}. Nothing inside their folders changed.`, 'ok');
           }}
           notify={notify}
         />
@@ -158,6 +169,7 @@ function EditDialog({ view, onClose, onSaved, notify }: { view: ProfileView; onC
             <input
               value={badge}
               maxLength={2}
+              placeholder={labelInitial(label)}
               onChange={(e) => setBadge(e.target.value.toUpperCase())}
               className="mt-1 w-20 rounded-md border border-line bg-bg px-2 py-1.5 text-center font-semibold outline-none focus:border-accent"
             />
