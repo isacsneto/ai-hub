@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import {
   adapterFor,
   addToLibrary,
+  appVersion,
   applyImport,
   buildLauncher,
   contractHome,
@@ -16,6 +17,7 @@ import {
   getProfile,
   isolationFor,
   launchProfile,
+  listProcesses,
   loadHub,
   mainFile,
   readPlistString,
@@ -28,12 +30,14 @@ import {
   sharingMatrix,
   takeover,
   undoLast,
+  UpdateRelaunchWatcher,
+  watchTargets,
   withHubLock,
   type ItemKind,
   type Profile,
   type ShareKind,
 } from '@aihub/core';
-import { BrowserWindow, Menu, Tray, app, dialog, ipcMain, nativeImage, shell } from 'electron';
+import { BrowserWindow, Menu, Notification, Tray, app, dialog, ipcMain, nativeImage, shell } from 'electron';
 import { API_METHODS } from '../shared/methods';
 import { checkForUpdate, downloadAndInstall, installTarget, type Release, type UpdateStatus } from './updater';
 
@@ -319,6 +323,57 @@ for (const name of exposed) {
 let tray: Tray | undefined;
 let win: BrowserWindow | undefined;
 
+const notifyUser = (title: string, body: string) => {
+  if (Notification.isSupported()) new Notification({ title, body }).show();
+};
+
+/** Puts a Claude Desktop profile back when an update restarts it as the default account (see relaunch-watch). */
+function watchClaudeUpdates() {
+  const watcher = new UpdateRelaunchWatcher({
+    now: Date.now,
+    processes: () => listProcesses(ctx),
+    appVersion: (a) => appVersion(ctx, a),
+    reopen: async (p) => launchProfile(ctx, await loadHub(ctx), p),
+    terminate: (pid) => {
+      try {
+        process.kill(pid, 'SIGTERM'); // Claude quits normally on SIGTERM
+      } catch {
+        // already gone
+      }
+    },
+    report: (e) => {
+      if (e.type === 'reopened') {
+        notifyUser('Claude updated', `Reopened ${e.profile.label}${e.closedDefault ? ' and closed the default window the update opened' : ''}.`);
+      } else if (e.type === 'reopen-failed') {
+        notifyUser(`Could not reopen ${e.profile.label}`, e.message);
+      }
+    },
+  });
+  let busy = false;
+  setInterval(() => {
+    if (busy) return;
+    busy = true;
+    void loadHub(ctx)
+      .then((hub) => watchTargets(ctx, hub))
+      .then((targets) => watcher.tick(targets))
+      .catch(() => undefined) // a hub.yaml mid-edit or a failed ps: try again next tick
+      .finally(() => (busy = false));
+  }, 3000);
+}
+
+const openAtLogin = () => app.getLoginItemSettings().openAtLogin;
+const loginItem = (): Electron.MenuItemConstructorOptions => ({
+  label: 'Open at Login',
+  type: 'checkbox',
+  checked: openAtLogin(),
+  enabled: app.isPackaged,
+  click: (item) => {
+    app.setLoginItemSettings({ openAtLogin: item.checked });
+    void refreshTray();
+    setAppMenu();
+  },
+});
+
 async function refreshTray() {
   if (!tray) return;
   const hub = await loadHub(ctx).catch(() => ({ profiles: [] as Profile[] }));
@@ -335,6 +390,7 @@ async function refreshTray() {
         ? { label: `Install AI-Hub ${updateStatus.latest}…`, click: () => void api.installUpdate().catch((err: Error) => dialog.showErrorBox('Update failed', err.message)) }
         : { label: 'Check for Updates', enabled: app.isPackaged, click: () => void checkUpdates() },
       { label: 'Open AI-Hub', click: () => (win ? win.show() : createWindow()) },
+      loginItem(),
       { label: 'Quit', role: 'quit' },
     ]),
   );
@@ -409,6 +465,7 @@ function setAppMenu() {
                 (err: Error) => dialog.showErrorBox('Could not install the command', err.message),
               ),
           },
+          loginItem(),
           { type: 'separator' },
           { role: 'hide' },
           { role: 'hideOthers' },
@@ -428,11 +485,13 @@ app.on('second-instance', () => (win ? (win.show(), win.focus()) : createWindow(
 
 app.whenReady().then(() => {
   setAppMenu();
-  const w = createWindow();
   if (SMOKE) {
-    void smoke(w, SMOKE);
+    void smoke(createWindow(), SMOKE);
     return;
   }
+  // Opened at login: just the menu bar item; the window opens from there.
+  if (!app.getLoginItemSettings().wasOpenedAtLogin) createWindow();
+  watchClaudeUpdates();
   if (app.isPackaged) {
     setTimeout(() => void checkUpdates(), 5000);
     setInterval(() => void checkUpdates(), UPDATE_EVERY_MS);

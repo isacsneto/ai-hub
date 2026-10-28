@@ -50,6 +50,8 @@ Desktop app from source: `npm run desktop` (it also lives in the menu bar as "â—
 | `cursor` | `--user-data-dir` (`--isolated-home` also separates `~/.cursor`, where MCP lives) | `aihub profile add cursor cursor-work --isolated-home` |
 | `browser` | its own Chromium `--user-data-dir` | `aihub profile add browser chatgpt-work --browser chrome --url https://chatgpt.com` |
 
+**Claude Desktop updates.** Claude restarts itself to update, and some versions come back without the profile's folder, which means the default account. While the AI-Hub app is running (menu bar; **Open at Login** keeps it there), it notices this and fixes it. About 12 seconds after the update, it reopens the profile and closes the default window the update opened. A default window that was already open stays. When Claude comes back in the right folder by itself, nothing happens. To turn it off, set `preferences.reopenAfterUpdate: false` in `hub.yaml`.
+
 New profiles live in `~/.aihub/profiles/<id>`. Existing ones are adopted where they are. The hub never moves a folder, because Claude Code ties each login to the folder path.
 
 ## Sharing

@@ -17,7 +17,7 @@ async function setup() {
   await write(`${app}/Contents/Info.plist`, '<plist><dict></dict></plist>');
   const hub: Hub = {
     version: 1,
-    preferences: { terminal: 'iTerm', launchersDir: '~/Launchers' },
+    preferences: { terminal: 'iTerm', launchersDir: '~/Launchers', reopenAfterUpdate: true },
     profiles: [
       { id: 'cw', tool: 'claude-code', label: 'Claude Work', home: '~/cw', icon: { image, badge: 'W', color: '#3B7DD8' } },
       { id: 'desk', tool: 'claude-desktop', label: 'Desk Work', dataDir: '~/desk', codeProfile: 'cw', app, icon: { image } },

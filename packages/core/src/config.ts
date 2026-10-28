@@ -139,6 +139,8 @@ const Preferences = z.strictObject({
   terminal: z.enum(['Terminal', 'iTerm', 'Ghostty']).default('Terminal'),
   /** Where `aihub launchers` writes app bundles. */
   launchersDir: PathString.default('~/Applications/AI-Hub'),
+  /** The desktop app reopens a Claude Desktop profile that an update restarted as the default account. */
+  reopenAfterUpdate: z.boolean().default(true),
 });
 
 export const HubSchema = z
