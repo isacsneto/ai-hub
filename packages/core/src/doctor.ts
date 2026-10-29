@@ -4,11 +4,12 @@ import type { Identity } from './adapters/types.js';
 import type { Hub, Profile, ToolId } from './config.js';
 import type { Context } from './context.js';
 import { detectGuard } from './discover.js';
-import { listEntries, readTextIfExists } from './fsx.js';
+import { exists, listEntries, readJsonIfExists, readTextIfExists } from './fsx.js';
 import { contractHome, resolvePath } from './paths.js';
 import { reconcile } from './share.js';
 import { loadState } from './state.js';
 import { plural } from './text.js';
+import { PROBED_TOOLS, verifiedOnThisMac } from './verify.js';
 
 export type FindingLevel = 'ok' | 'info' | 'warn' | 'error';
 /**
@@ -43,6 +44,18 @@ export function compareVersions(a: string, b: string): number {
     if (d) return Math.sign(d);
   }
   return 0;
+}
+
+const major = (v: string) => v.split('.')[0];
+
+/** The command a version check runs: the CLI itself, or the Codex CLI bundled in the ChatGPT/Codex app. */
+async function probeBinary(ctx: Context, tool: ToolId, profile: Profile): Promise<string | undefined> {
+  if (tool === 'codex-desktop') {
+    const app = await adapterForTool(tool).findBinary(ctx, profile as never);
+    const bundled = app && path.join(app, 'Contents/Resources/codex-cli/bin/codex');
+    return bundled && (await exists(bundled)) ? bundled : undefined;
+  }
+  return adapterForTool(tool).findBinary(ctx, profile as never);
 }
 
 export const LEAKY_LAUNCHD_VARS = [
@@ -88,18 +101,41 @@ export async function doctor(ctx: Context, hub: Hub, opts: { only?: string } = {
     }
   }
 
-  // Claude Code falls back to the shared Anthropic profile store for config folders without a login.
+  // Claude Code falls back to the `ant` CLI's login (~/.config/anthropic) for config folders without
+  // their own. Harmless while every Claude profile is signed in; a profile that signs out would
+  // quietly run on that account instead of asking to log in.
   if (profiles.some((p) => p.tool === 'claude-code' || p.tool === 'claude-desktop')) {
     const store = path.join(ctx.home, '.config/anthropic');
     const creds = (await listEntries(path.join(store, 'credentials'))).filter((e) => !e.isDir);
     if (creds.length) {
       const active = (await readTextIfExists(path.join(store, 'active_config')))?.trim() || 'default';
-      add({
-        level: 'warn',
-        kind: 'isolation',
-        message: `Shared Anthropic profile in ~/.config/anthropic (active: ${active}): Claude profiles that aren't signed in fall back to it instead of failing.`,
-        hint: 'Sign every Claude profile in (aihub run <id> auth login), or remove that profile if you no longer use it.',
-      });
+      // Only the non-secret fields: whose login it is and until when.
+      const cred = (await readJsonIfExists(path.join(store, 'credentials', `${active}.json`)).catch(() => undefined)) as
+        | { account_email?: unknown; expires_at?: unknown }
+        | undefined;
+      const email = typeof cred?.account_email === 'string' ? cred.account_email : undefined;
+      const expired = typeof cred?.expires_at === 'number' && cred.expires_at * 1000 < Date.now();
+      const signedOut: string[] = [];
+      for (const p of profiles.filter((q) => q.tool === 'claude-code')) {
+        if ((await adapterFor(p).identity(ctx, p)).status === 'signed-out') signedOut.push(p.label);
+      }
+      const about = [email, active !== 'default' && `profile "${active}"`, expired && 'expired'].filter(Boolean).join(', ');
+      const who = `the \`ant\` CLI's login${about ? ` (${about})` : ''} in ~/.config/anthropic`;
+      add(
+        signedOut.length
+          ? {
+              level: 'warn',
+              kind: 'isolation',
+              message: `${signedOut.join(', ')} ${signedOut.length === 1 ? 'is' : 'are'} not signed in, so Claude Code falls back to ${who} instead of asking you to log in.`,
+              hint: 'Sign those profiles in (Open in Terminal, then /login), or run `ant auth logout` if you no longer use the ant CLI.',
+            }
+          : {
+              level: 'info',
+              kind: 'isolation',
+              message: `Claude Code would fall back to ${who} for a profile that isn't signed in. All your Claude Code profiles are signed in, so none does.`,
+              hint: "If you don't use the ant CLI, `ant auth logout` removes this fallback.",
+            },
+      );
     }
   }
 
@@ -134,14 +170,33 @@ export async function doctor(ctx: Context, hub: Hub, opts: { only?: string } = {
       add({ level: 'ok', kind: 'untested', tool, message: `${name} ${version} matches the tested version.` });
     } else {
       const newest = [...tested.versions].sort(compareVersions).at(-1)!;
-      const newer = compareVersions(version, newest) > 0;
-      add({
-        level: newer ? 'warn' : 'info',
-        kind: 'untested',
-        tool,
-        message: `${name} ${version} is ${newer ? 'newer' : 'older'} than the last tested version (${newest}); isolation results may differ.`,
-        hint: 'Re-run scripts/phase0-remaining.sh and update packages/core/src/adapters/tested.ts.',
-      });
+      if (compareVersions(version, newest) < 0) {
+        add({ level: 'info', kind: 'untested', tool, message: `${name} ${version} is older than the last tested version (${newest}).` });
+      } else if ((PROBED_TOOLS as readonly string[]).includes(tool)) {
+        // Terminal tools are re-checked on this Mac, once per new version.
+        const bin = await probeBinary(ctx, tool, profile);
+        const r = bin ? await verifiedOnThisMac(ctx, tool as (typeof PROBED_TOOLS)[number], version, bin) : { ok: false, detail: 'its command was not found' };
+        add({
+          level: r.ok ? 'ok' : 'warn',
+          kind: 'untested',
+          tool,
+          message: r.ok
+            ? `${name} ${version} is newer than the tested ${newest}; re-checked on this Mac: ${r.detail}.`
+            : `${name} ${version} is newer than the tested ${newest}, and the check on this Mac failed: ${r.detail}.`,
+          ...(r.ok ? {} : { hint: 'Run scripts/phase0-remaining.sh from a normal Terminal to see what changed.' }),
+        });
+      } else if (major(version) === major(newest)) {
+        // Desktop apps and browsers isolate with Chromium's --user-data-dir, which doesn't change between minor releases.
+        add({ level: 'ok', kind: 'untested', tool, message: `${name} ${version} is in the same major version as the tested ${newest}.` });
+      } else {
+        add({
+          level: 'warn',
+          kind: 'untested',
+          tool,
+          message: `${name} ${version} is a new major version (tested: ${newest}); isolation results may differ.`,
+          hint: 'Re-run scripts/phase0-remaining.sh and update packages/core/src/adapters/tested.ts.',
+        });
+      }
     }
   }
   for (const tool of new Set(profiles.map((p) => p.tool))) {
@@ -155,7 +210,9 @@ export async function doctor(ctx: Context, hub: Hub, opts: { only?: string } = {
         message: `${adapter.displayName}: history separation is ${tested.isolatedHistory} (separate folders), not yet checked with two accounts.`,
       });
     }
-    if (!profiles.some((p) => p.tool === tool && usesGlobalDirs(p))) continue;
+    // Every-profile folders only matter when two accounts (two folders) read them; with one, nothing is shared.
+    const readers = new Set(profiles.filter((p) => p.tool === tool && usesGlobalDirs(p)).map((p) => adapterFor(p).paths(ctx, p).root));
+    if (readers.size < 2) continue;
     for (const g of tested.globalSkillDirs) {
       const entries = await listEntries(resolvePath(g.path, ctx.home));
       if (!entries.length) continue;
@@ -203,13 +260,25 @@ export async function doctor(ctx: Context, hub: Hub, opts: { only?: string } = {
 
     if (inv.skillsDirLinkedTo) {
       const owner = hub.profiles.find((q) => q.id !== p.id && path.join(rootOf(q), 'skills') === inv.skillsDirLinkedTo);
-      add({
-        level: 'warn',
-        kind: 'config',
-        profile: p.id,
-        message: `skills/ is a single link to ${contractHome(inv.skillsDirLinkedTo, ctx.home)}${owner ? ` (${owner.id})` : ''}: all of those skills are shared, all or nothing.`,
-        hint: `Pick skills one by one instead: aihub share skill <name> ${p.id} --detach`,
-      });
+      const target = `${contractHome(inv.skillsDirLinkedTo, ctx.home)}${owner ? ` (${owner.label})` : ''}`;
+      // Set up on purpose by the tool that manages the folder (cpm's share = ["skills"]): worth knowing, not a fault.
+      add(
+        p.managedBy
+          ? {
+              level: 'info',
+              kind: 'config',
+              profile: p.id,
+              message: `skills/ links to ${target}, set up by ${p.managedBy}: every skill there is available in this profile too.`,
+              hint: `To pick skills one by one instead: aihub takeover, then aihub share skill <name> ${p.id} --detach`,
+            }
+          : {
+              level: 'warn',
+              kind: 'config',
+              profile: p.id,
+              message: `skills/ is a single link to ${target}: all of those skills are shared, all or nothing.`,
+              hint: `Pick skills one by one instead: aihub share skill <name> ${p.id} --detach`,
+            },
+      );
     }
     for (const s of inv.skills.filter((e) => e.broken)) {
       add({ level: 'warn', kind: 'state', profile: p.id, message: `Skill "${s.name}" is a broken link → ${s.linkTarget}.` });

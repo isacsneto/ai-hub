@@ -326,8 +326,10 @@ describe('ownership', () => {
     await write(`${home}/.config/anthropic/active_config`, 'work\n');
     const report = await doctor(ctx, hub);
     const f = report.findings.find((x) => x.message.includes('~/.config/anthropic'));
+    // The setup's Claude profile has no login of its own, so it would run on that one.
     expect(f).toMatchObject({ level: 'warn', kind: 'isolation' });
-    expect(f!.message).toContain('active: work');
+    expect(f!.message).toContain('profile "work"');
+    expect(f!.message).toContain('is not signed in');
     expect(JSON.stringify(report)).not.toContain('secret');
   });
 

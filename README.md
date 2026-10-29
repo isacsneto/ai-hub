@@ -113,11 +113,13 @@ Exports never include profile folders, logins or the journal.
 
 ## What has been verified
 
-`packages/core/src/adapters/tested.ts` records what was tested, and on which version. `aihub doctor` and the Health page warn when a tool is newer than that. To re-check after a tool update, run this from a normal Terminal:
+`packages/core/src/adapters/tested.ts` records what was tested, and on which version. When a terminal tool is newer than that (Claude Code, Codex, and the Codex inside the ChatGPT/Codex app), `aihub doctor` and the Health page re-check it on your Mac, once per version: they run it against empty temporary folders in a clean environment and confirm it stays inside them (no login, no MCP servers). No model calls, no real profile touched. Desktop apps and browsers isolate with Chromium's `--user-data-dir`, so they only warn on a new major version. For the full set of checks, run this from a normal Terminal:
 
 ```sh
 scripts/phase0-remaining.sh
 ```
+
+**Cursor and MCP servers.** Cursor reads its MCP servers from `~/.cursor/mcp.json` in your home folder, not from its data folder, so every Cursor profile without its own home shares them. With one Cursor profile nothing is shared. When you add a second Cursor account, tick **Keep its MCP servers separate too** (or `--isolated-home`): it runs with its own home folder and its own `~/.cursor`. The Profiles page names any Cursor profiles that still share MCP servers.
 
 This tool isolates accounts and their data, not files. Every profile runs as your macOS user.
 

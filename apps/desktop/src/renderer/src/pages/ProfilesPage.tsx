@@ -102,9 +102,9 @@ export function ProfilesPage({ notify }: { notify: Notify }) {
                   {v.profile.tool === 'claude-desktop' && v.account === v.profile.id && (
                     <Chip tone={v.profile.codeProfile ? 'neutral' : 'warn'}>Code tab → {v.profile.codeProfile ?? '~/.claude'}</Chip>
                   )}
-                  {v.tested.mcp === 'no' && (
-                    <Chip tone="warn" title="This profile reads MCP servers from ~/.cursor, which every Cursor profile without its own home shares">
-                      shared MCP
+                  {v.sharesMcpWith.length > 0 && (
+                    <Chip tone="warn" title={`Reads MCP servers from ~/.cursor/mcp.json, like ${v.sharesMcpWith.join(', ')}. Give one of them its own home to separate them.`}>
+                      shares MCP with {v.sharesMcpWith.join(', ')}
                     </Chip>
                   )}
                   {v.profile.tool === 'cursor' && v.profile.homeMode === 'isolated' && (

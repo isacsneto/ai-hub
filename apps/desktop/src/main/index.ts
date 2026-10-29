@@ -42,6 +42,7 @@ import {
   takeover,
   undoLast,
   UpdateRelaunchWatcher,
+  usesGlobalDirs,
   watchTargets,
   withHubLock,
   type ItemKind,
@@ -144,6 +145,11 @@ const api = {
           folder: contractHome(adapter.paths(ctx, p).root, ctx.home),
           tested: isolationFor(p),
           account: accountOf(ctx, hub, p),
+          // Cursor profiles without their own home all read ~/.cursor/mcp.json: name the others that do.
+          sharesMcpWith:
+            p.tool === 'cursor' && usesGlobalDirs(p)
+              ? hub.profiles.filter((q) => q.id !== p.id && q.tool === 'cursor' && usesGlobalDirs(q)).map((q) => q.label)
+              : [],
           launcher: (await fs.stat(launcherPath(ctx, hub, p)).catch(() => undefined)) ? contractHome(launcherPath(ctx, hub, p), ctx.home) : undefined,
           inDock: inDock.has(launcherPath(ctx, hub, p)),
         };

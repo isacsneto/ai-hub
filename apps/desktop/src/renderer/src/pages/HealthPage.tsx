@@ -71,7 +71,7 @@ export function HealthPage() {
                 <li key={i} className="flex gap-2 text-[12.5px]">
                   <span className={`w-3 shrink-0 text-center font-bold ${LEVEL[f.level].cls}`}>{LEVEL[f.level].mark}</span>
                   <div className="min-w-0">
-                    <span>{f.message}</span> {f.kind === 'isolation' && <Chip tone="bad">isolation</Chip>}
+                    <span>{f.message}</span> {f.kind === 'isolation' && (f.level === 'error' || f.level === 'warn') && <Chip tone="bad">isolation</Chip>}
                     {f.hint && <div className="mt-0.5 font-mono text-[11px] text-muted">{f.hint}</div>}
                   </div>
                 </li>
