@@ -52,7 +52,7 @@ Desktop app from source: `npm run desktop` (it also lives in the menu bar as "�
 
 **Claude Desktop updates.** Claude restarts itself to update, and some versions come back without the profile's folder, which means the default account. While the AI-Hub app is running (menu bar; **Open at Login** keeps it there), it notices this and fixes it. About 12 seconds after the update, it reopens the profile and closes the default window the update opened. A default window that was already open stays. When Claude comes back in the right folder by itself, or an update installs without reopening anything, nothing happens. To turn it off, set `preferences.reopenAfterUpdate: false` in `hub.yaml`.
 
-In the app, **New profile…** creates an account: Claude (Claude Code, plus the Claude desktop app on the same login if you want it), Codex/ChatGPT, Cursor, or a web account in its own browser profile. Profiles that share a login (a terminal tool and the desktop app running on its folder) are shown as one account. **Edit → Remove…** stops tracking a profile: its folder and login stay, and it can also take out what was shared into it (plugins stay installed), or move a folder AI-Hub created to the Trash (only when no other profile uses that folder and nothing is running on it). The CLI equivalents are `aihub profile remove <id> [--unshare | --trash]`.
+In the app, **New profile…** creates an account: Claude (Claude Code, plus the Claude desktop app on the same login if you want it), Codex/ChatGPT, Cursor, or a web account in its own browser profile. Profiles that share a login (a terminal tool and the desktop app running on its folder) are shown as one account. Each program has its own **Open in Terminal** / **Open app** button and **Add to Dock**, which builds a launcher with the profile's badge and puts it in the Dock (it follows renames and goes away when the profile is removed). **Edit → Remove…** stops tracking a profile: its folder and login stay, and it can also take out what was shared into it (plugins stay installed), or move a folder AI-Hub created to the Trash (only when no other profile uses that folder and nothing is running on it). The CLI equivalents are `aihub profile remove <id> [--unshare | --trash]`.
 
 New profiles live in `~/.aihub/profiles/<id>`. Existing ones are adopted where they are. The hub never moves a folder, because Claude Code ties each login to the folder path.
 
@@ -94,7 +94,7 @@ Safety rules:
 ```sh
 aihub profile set claude-work --badge W --color "#3B7DD8"
 aihub icon claude-work                    # preview PNG
-aihub launcher build                      # ~/Applications/AI-Hub/<Label>.app with the badged icon (in the app: Create launcher on each profile)
+aihub launcher build                      # ~/Applications/AI-Hub/<Label>.app with the badged icon (in the app: Add to Dock on each profile)
 eval "$(aihub shell-init zsh)"            # in ~/.zshrc: a command per profile and per-folder switching
 aihub link claude-work                    # this folder (and below) uses claude-work
 ```

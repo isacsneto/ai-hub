@@ -6,6 +6,7 @@ import {
   abandonUnfinishedUndo,
   accountOf,
   adapterFor,
+  addToDock,
   addToLibrary,
   appVersion,
   applyImport,
@@ -15,6 +16,7 @@ import {
   createContext,
   deleteProfile,
   discover,
+  dockApps,
   doctor,
   getLibraryItem,
   ITEM_KINDS,
@@ -32,6 +34,7 @@ import {
   reconcileAll,
   relabelProfile,
   removalInfo,
+  removeFromDock,
   renderIcon,
   saveHub,
   setSharing,
@@ -130,6 +133,7 @@ type IconPatch = NonNullable<Profile['icon']>;
 const api = {
   async profiles() {
     const hub = await loadHub(ctx);
+    const inDock = new Set(await dockApps(ctx).catch(() => [] as string[]));
     return Promise.all(
       hub.profiles.map(async (p) => {
         const adapter = adapterFor(p);
@@ -141,6 +145,7 @@ const api = {
           tested: isolationFor(p),
           account: accountOf(ctx, hub, p),
           launcher: (await fs.stat(launcherPath(ctx, hub, p)).catch(() => undefined)) ? contractHome(launcherPath(ctx, hub, p), ctx.home) : undefined,
+          inDock: inDock.has(launcherPath(ctx, hub, p)),
         };
       }),
     );
@@ -237,12 +242,18 @@ const api = {
     return made.map((p) => ({ id: p.id, label: p.label, tool: p.tool }));
   },
 
-  /** Build (or rebuild) one profile's launcher app and show it in the Finder, ready to drag to the Dock. */
-  async makeLauncher(id: string) {
+  /** Build the profile's launcher app (current name and icon) and add it to the Dock. */
+  async addToDock(id: string) {
     const hub = await loadHub(ctx);
     const app = await buildLauncher(ctx, hub, getProfile(hub, id));
-    shell.showItemInFolder(app);
+    await addToDock(ctx, app);
     return contractHome(app, ctx.home);
+  },
+
+  /** Take the profile's launcher out of the Dock; the launcher app itself stays (Spotlight still finds it). */
+  async removeFromDock(id: string) {
+    const hub = await loadHub(ctx);
+    await removeFromDock(ctx, launcherPath(ctx, hub, getProfile(hub, id)));
   },
 
   async removalInfo(id: string) {

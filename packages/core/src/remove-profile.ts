@@ -119,7 +119,7 @@ export async function deleteProfile(
 
     try {
       const launcher = await removeLauncher(ctx, hub, p);
-      if (launcher) result.launcher = contractHome(launcher, ctx.home);
+      if (launcher) result.launcher = contractHome(launcher, ctx.home); // its Dock tile goes with it
     } catch {
       // Something else lives at the launcher's path: not ours to delete.
     }

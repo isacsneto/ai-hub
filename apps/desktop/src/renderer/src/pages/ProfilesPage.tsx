@@ -5,6 +5,16 @@ import { Button, Chip, Dialog, Empty, PageHeader, ProfileIcon, labelInitial, plu
 
 const COLORS = ['#3B7DD8', '#5DCAA5', '#E0A55E', '#7C5CC4', '#D25F8C', '#4CA9B2', '#6B7280'];
 
+const BROWSER_LABELS: Record<string, string> = { chrome: 'Chrome', edge: 'Edge', brave: 'Brave', chromium: 'Chromium', vivaldi: 'Vivaldi' };
+
+/** Say where it opens: terminal tools in Terminal, the rest as their own app or browser window. */
+function openLabel(v: ProfileView): string {
+  const p = v.profile;
+  if (p.tool === 'claude-code' || p.tool === 'codex') return 'Open in Terminal';
+  if (p.tool === 'browser') return `Open in ${BROWSER_LABELS[p.browser] ?? 'browser'}`;
+  return 'Open app';
+}
+
 function AccountLine({ v }: { v: ProfileView }) {
   const id = v.identity;
   if (id.status === 'signed-in') return <span className="text-ok">{id.email ?? id.detail ?? 'Signed in'}</span>;
@@ -30,16 +40,21 @@ export function ProfilesPage({ notify }: { notify: Notify }) {
   const launch = async (v: ProfileView) => {
     try {
       await api.launch(v.profile.id);
-      notify(`Launching ${v.profile.label}…`, 'ok');
+      notify(`Opening ${v.profile.label}…`, 'ok');
     } catch (e) {
       notify(errorText(e), 'bad');
     }
   };
 
-  const makeLauncher = async (v: ProfileView) => {
+  const toggleDock = async (v: ProfileView) => {
     try {
-      const app = await api.makeLauncher(v.profile.id);
-      notify(`${v.launcher ? 'Updated' : 'Created'} ${app}. Drag it from the Finder to the Dock; Spotlight finds it too.`, 'ok');
+      if (v.inDock) {
+        await api.removeFromDock(v.profile.id);
+        notify(`Removed ${v.profile.label} from the Dock.`, 'ok');
+      } else {
+        await api.addToDock(v.profile.id);
+        notify(`Added ${v.profile.label} to the Dock. Spotlight finds it too.`, 'ok');
+      }
       load();
     } catch (e) {
       notify(errorText(e), 'bad');
@@ -106,15 +121,15 @@ export function ProfilesPage({ notify }: { notify: Notify }) {
                 </div>
                 <div className="mt-2 flex flex-wrap gap-2">
                   <Button variant="primary" onClick={() => launch(v)}>
-                    Launch
+                    {openLabel(v)}
                   </Button>
                   <Button onClick={() => setEditing(v)}>Edit</Button>
                   <Button
                     variant="ghost"
-                    onClick={() => makeLauncher(v)}
-                    title={v.launcher ? `${v.launcher}: rebuild it with the current name and icon` : 'An app with this icon in ~/Applications/AI-Hub, for the Dock and Spotlight'}
+                    onClick={() => toggleDock(v)}
+                    title={v.inDock ? 'Its icon stays in ~/Applications/AI-Hub, so Spotlight still finds it' : 'Adds an icon that opens this profile, with its badge, to the Dock'}
                   >
-                    {v.launcher ? 'Update launcher' : 'Create launcher'}
+                    {v.inDock ? 'Remove from Dock' : 'Add to Dock'}
                   </Button>
                   <Button variant="ghost" onClick={() => api.reveal(v.profile.id).catch((e) => notify(errorText(e), 'bad'))}>
                     Show folder
@@ -436,7 +451,6 @@ const SITES = [
   { name: 'ChatGPT', url: 'https://chatgpt.com' },
   { name: 'Gemini', url: 'https://gemini.google.com' },
 ];
-const BROWSER_NAMES: Record<string, string> = { chrome: 'Chrome', edge: 'Edge', brave: 'Brave', chromium: 'Chromium', vivaldi: 'Vivaldi' };
 
 function NewAccountDialog({ onClose, onDone, notify }: { onClose: () => void; onDone: (made: { id: string; label: string }[]) => void; notify: Notify }) {
   const [kind, setKind] = useState<Kind>('claude');
@@ -539,7 +553,7 @@ function NewAccountDialog({ onClose, onDone, notify }: { onClose: () => void; on
               <select value={browser} onChange={(e) => setBrowser(e.target.value)} className={field} disabled={!browsers?.length}>
                 {browsers?.map((b) => (
                   <option key={b} value={b}>
-                    {BROWSER_NAMES[b] ?? b}
+                    {BROWSER_LABELS[b] ?? b}
                   </option>
                 ))}
               </select>

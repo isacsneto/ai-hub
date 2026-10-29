@@ -4,6 +4,7 @@ import path from 'node:path';
 import { adapterFor } from './adapters/index.js';
 import { cleanLabel, preferences, type Hub, type Profile } from './config.js';
 import type { Context } from './context.js';
+import { removeFromDock } from './dock.js';
 import { shellQuote } from './env.js';
 import { atomicWrite, exists } from './fsx.js';
 import { renderIcon, writeIcns } from './icons.js';
@@ -123,6 +124,8 @@ export async function relabelProfile(ctx: Context, hub: Hub, p: Profile, label: 
   p.label = next;
   if (next === old.label || !(await exists(launcherPath(ctx, hub, old)))) return undefined;
   const built = await buildLauncher(ctx, hub, p);
+  // A launcher in the Dock follows the rename, in the same spot.
+  await removeFromDock(ctx, launcherPath(ctx, hub, old), built).catch(() => false);
   await removeLauncher(ctx, hub, old);
   return built;
 }
@@ -132,6 +135,7 @@ export async function removeLauncher(ctx: Context, hub: Hub, p: Profile, opts: {
   if (!(await exists(app))) return undefined;
   await assertOurs(ctx, app);
   await fs.rm(app, { recursive: true, force: true });
+  await removeFromDock(ctx, app).catch(() => false); // a Dock tile would point at nothing
   return app;
 }
 

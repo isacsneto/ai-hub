@@ -22,6 +22,7 @@ export * from './matrix.js';
 export * from './relaunch-watch.js';
 export * from './remove-profile.js';
 export * from './new-account.js';
+export { addToDock, dockApps, removeFromDock } from './dock.js';
 export { readPlistString } from './plist.js';
 export { plural } from './text.js';
 export { AIHUB_VERSION } from './version.js';
