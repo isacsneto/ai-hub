@@ -1,7 +1,9 @@
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  abandonUnfinishedUndo,
   accountOf,
   adapterFor,
   addToLibrary,
@@ -173,6 +175,10 @@ const api = {
     return reconcileAll(ctx, await loadHub(ctx), opts);
   },
 
+  async skipUnfinishedUndo() {
+    return (await abandonUnfinishedUndo(ctx)) ?? null;
+  },
+
   async undo() {
     return (await undoLast(ctx)) ?? null;
   },
@@ -199,13 +205,23 @@ const api = {
     return { kind: item.kind, name: item.name };
   },
 
+  /** Returns the launcher's path when it was rebuilt to match (it only exists if the user made one). */
   async updateProfile(id: string, patch: { label?: string; icon?: IconPatch }) {
-    const hub = await loadHub(ctx);
-    const p = getProfile(hub, id);
-    if (patch.label?.trim()) await relabelProfile(ctx, hub, p, patch.label);
-    if (patch.icon) p.icon = { ...p.icon, ...patch.icon };
-    await saveHub(ctx, hub);
+    const launcher = await withHubLock(ctx, async () => {
+      const hub = await loadHub(ctx);
+      const p = getProfile(hub, id);
+      const before = JSON.stringify(p.icon ?? {});
+      // Icon first, so a launcher rebuilt for a new name already has the new icon.
+      if (patch.icon) p.icon = { ...p.icon, ...patch.icon };
+      let built = patch.label?.trim() ? await relabelProfile(ctx, hub, p, patch.label) : undefined;
+      if (!built && JSON.stringify(p.icon ?? {}) !== before && (await fs.stat(launcherPath(ctx, hub, p)).catch(() => undefined))) {
+        built = await buildLauncher(ctx, hub, p);
+      }
+      await saveHub(ctx, hub);
+      return built;
+    });
     refreshTray();
+    return launcher ? contractHome(launcher, ctx.home) : undefined;
   },
 
   async installedBrowsers() {
@@ -234,8 +250,7 @@ const api = {
   },
 
   async removeProfile(id: string, opts: { unshare?: boolean; trash?: boolean }) {
-    const hub = await loadHub(ctx);
-    const r = await deleteProfile(ctx, hub, id, {
+    const r = await deleteProfile(ctx, id, {
       unshare: !!opts.unshare,
       // The Finder's Trash, so Put Back works.
       ...(opts.trash ? { trash: (dir: string) => shell.trashItem(dir) } : {}),
@@ -401,7 +416,8 @@ function watchClaudeUpdates() {
     void loadHub(ctx)
       .then((hub) => watchTargets(ctx, hub))
       .then((targets) => watcher.tick(targets))
-      .catch(() => undefined) // a hub.yaml mid-edit or a failed ps: try again next tick
+      // A hub.yaml mid-edit or a failed ps: try again next tick (logged, so real bugs don't hide).
+      .catch((err: Error) => console.error('[aihub] update watch:', err.message))
       .finally(() => (busy = false));
   }, 3000);
 }
@@ -414,6 +430,13 @@ const loginItem = (): Electron.MenuItemConstructorOptions => ({
   enabled: app.isPackaged,
   click: (item) => {
     app.setLoginItemSettings({ openAtLogin: item.checked });
+    // macOS can hold a new login item for approval in System Settings; say so instead of a silent no.
+    if (item.checked && app.getLoginItemSettings().status === 'requires-approval') {
+      void dialog.showMessageBox({
+        message: 'macOS needs your approval',
+        detail: 'Allow AI-Hub in System Settings → General → Login Items to open it at login.',
+      });
+    }
     void refreshTray();
     setAppMenu();
   },
@@ -535,7 +558,10 @@ app.whenReady().then(() => {
     return;
   }
   // Opened at login: just the menu bar item; the window opens from there.
-  if (!app.getLoginItemSettings().wasOpenedAtLogin) createWindow();
+  // wasOpenedAtLogin isn't reported for every kind of login item; a launch within a few minutes of
+  // the Mac starting up, with Open at Login on, counts too.
+  const login = app.getLoginItemSettings();
+  if (!(login.wasOpenedAtLogin || (login.openAtLogin && os.uptime() < 300))) createWindow();
   watchClaudeUpdates();
   if (app.isPackaged) {
     setTimeout(() => void checkUpdates(), 5000);

@@ -145,6 +145,28 @@ describe('skills', () => {
 });
 
 describe('whole-folder links (cpm)', () => {
+  it('an undo that stops partway puts the original link back once it can finish', async () => {
+    const { home, ctx, hub, cw } = await setup();
+    await write(`${home}/other/skills/theirs/SKILL.md`, 'theirs');
+    await fs.symlink(`${home}/other/skills`, `${home}/cw/skills`);
+    await share(ctx, hub, 'skills', 'review', ['cw']);
+    await reconcile(ctx, hub, cw, { detach: true }); // journal: remove skills, mkdir skills, link skills/review
+
+    await fs.chmod(`${home}/cw/skills`, 0o500); // the inner link can't be removed yet
+    try {
+      const first = await undoLast(ctx);
+      // The older "put the original link back" waits for it instead of giving up as "something new in the way".
+      expect(first?.kept).toEqual([]);
+      expect(first?.failed.join('\n')).toMatch(/waits for the newer change/);
+    } finally {
+      await fs.chmod(`${home}/cw/skills`, 0o755);
+    }
+    const second = await undoLast(ctx);
+    expect(second).toMatchObject({ resumed: true, failed: [], kept: [] });
+    expect(await fs.readlink(`${home}/cw/skills`)).toBe(`${home}/other/skills`);
+  });
+
+
   it('blocks until --detach, then swaps the link for a real folder; undo restores it', async () => {
     const { home, ctx, hub, cw } = await setup();
     await write(`${home}/other/skills/theirs/SKILL.md`, 'theirs');

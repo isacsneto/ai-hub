@@ -115,6 +115,24 @@ describe('undo that stops partway', () => {
 });
 
 describe('managed blocks edited by hand', () => {
+  it("doesn't call a block hand-edited after an undo that kept the file", async () => {
+    const { home, ctx, hub, cw } = await setup();
+    await setSharing(ctx, hub, 'instructions', 'style', ['cw'], true);
+    await reconcile(ctx, hub, cw);
+    await write(itemPath(ctx, 'instructions', 'style'), '# Coding style\nUse spaces.\n');
+    await addToLibrary(ctx, 'instructions', `${home}/src/deploy.md`);
+    await setSharing(ctx, hub, 'instructions', 'deploy', ['cw'], true);
+    await reconcile(ctx, hub, cw); // the block now imports style and deploy
+    await fs.appendFile(`${home}/cw/CLAUDE.md`, '\nMy own notes\n'); // an edit outside the block
+    const undo = await undoLast(ctx);
+    expect(undo?.kept.join()).toMatch(/CLAUDE\.md/); // the file is left as it is
+    // The records still match the block in the file, so the next change isn't a false conflict.
+    await setSharing(ctx, hub, 'instructions', 'deploy', ['cw'], false);
+    const plan = await reconcile(ctx, hub, cw);
+    expect(plan.actions.find((a) => a.kind === 'instructions')?.status).toBe('done');
+  });
+
+
   it('leaves an AGENTS.md block edited in place alone unless forced', async () => {
     const { home, ctx, hub, cx } = await setup();
     await setSharing(ctx, hub, 'instructions', 'style', ['cx'], true);

@@ -4,17 +4,20 @@ import { SETTLE_MS, UpdateRelaunchWatcher, type WatchEvent, type WatchTarget } f
 
 const APP = '/Applications/Claude.app';
 const BIN = `${APP}/Contents/MacOS/Claude`;
-const work: ClaudeDesktopProfile = { id: 'desk-work', tool: 'claude-desktop', label: 'Claude · Work', dataDir: '/u/.aihub/profiles/desk-work' };
-const target: WatchTarget = { profile: work, app: APP, root: work.dataDir };
-const profileProc = (pid: number) => ({ pid, args: `${BIN} --user-data-dir=${work.dataDir}` });
+const desk = (id: string, dataDir: string): ClaudeDesktopProfile => ({ id, tool: 'claude-desktop', label: id, dataDir });
+const work = desk('desk-work', '/u/.aihub/profiles/desk-work');
+const target = (p: ClaudeDesktopProfile): WatchTarget => ({ profile: p, app: APP, root: p.dataDir });
+const profileProc = (pid: number, p = work) => ({ pid, args: `${BIN} --user-data-dir=${p.dataDir}` });
 const defaultProc = (pid: number) => ({ pid, args: BIN });
 const helper = (pid: number) => ({ pid, args: `${APP}/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper --type=gpu-process --user-data-dir=${work.dataDir}` });
+const SETTLE_TICKS = Math.ceil(SETTLE_MS / 3000) + 1;
 
 /** A fake Mac: set the processes and the app version, then advance the clock tick by tick. */
-function world() {
+function world(targets: WatchTarget[] = [target(work)], reopen?: () => Promise<void>) {
   const w = {
     t: 0,
     version: '1.0',
+    targets,
     procs: [] as { pid: number; args: string }[],
     reopened: [] as string[],
     terminated: [] as number[],
@@ -24,13 +27,13 @@ function world() {
     now: () => w.t,
     processes: async () => w.procs,
     appVersion: async () => w.version,
-    reopen: async (p) => void w.reopened.push(p.id),
+    reopen: reopen ?? (async (p) => void w.reopened.push(p.id)),
     terminate: (pid) => void w.terminated.push(pid),
     report: (e) => void w.events.push(e),
   });
   const tick = async (ms = 3000) => {
     w.t += ms;
-    await watcher.tick([target]);
+    await watcher.tick(w.targets);
   };
   const ticks = async (n: number) => {
     for (let i = 0; i < n; i++) await tick();
@@ -48,16 +51,30 @@ describe('reopening a Claude profile after an update', () => {
     w.version = '2.0';
     await tick();
     expect(w.reopened).toEqual([]); // gives Claude the chance to come back right first
-    await ticks(Math.ceil(SETTLE_MS / 3000));
+    await ticks(SETTLE_TICKS);
     expect(w.reopened).toEqual(['desk-work']);
     expect(w.terminated).toEqual([20]);
     expect(w.events[0]).toMatchObject({ type: 'reopened', closedDefault: true });
 
-    // Only once, and a default window that shows up late is closed too.
+    // Done: a default window the user opens afterwards is theirs.
     w.procs = [profileProc(30), defaultProc(31)];
-    await ticks(3);
+    await ticks(30);
     expect(w.reopened).toEqual(['desk-work']);
-    expect(w.terminated).toEqual([20, 31]);
+    expect(w.terminated).toEqual([20]);
+  });
+
+  it('acts when the wrong window shows up only after the version changed', async () => {
+    const { w, tick, ticks } = world();
+    w.procs = [profileProc(10)];
+    await ticks(2);
+    w.procs = [];
+    await tick();
+    w.version = '2.0';
+    await ticks(2);
+    w.procs = [defaultProc(20)];
+    await ticks(SETTLE_TICKS);
+    expect(w.reopened).toEqual(['desk-work']);
+    expect(w.terminated).toEqual([20]);
   });
 
   it('does nothing when Claude comes back in the right folder by itself', async () => {
@@ -73,15 +90,28 @@ describe('reopening a Claude profile after an update', () => {
     expect(w.terminated).toEqual([]);
   });
 
-  it('leaves alone a profile you quit yourself', async () => {
+  it('does nothing when an update installs on quit without relaunching', async () => {
+    const { w, tick, ticks } = world();
+    w.procs = [profileProc(10)];
+    await ticks(2);
+    w.procs = [];
+    w.version = '2.0';
+    await tick();
+    await ticks(60);
+    expect(w.reopened).toEqual([]);
+  });
+
+  it('leaves alone a profile you quit, even if you then open the default and it updates', async () => {
     const { w, ticks } = world();
     w.procs = [profileProc(10)];
     await ticks(2);
     w.procs = [];
-    await ticks(60);
-    w.version = '2.0'; // an update much later doesn't count
-    w.procs = [defaultProc(50)];
+    await ticks(15); // quit by hand
+    w.procs = [defaultProc(51)]; // the user opens plain Claude
     await ticks(10);
+    w.version = '2.0'; // which then updates and restarts
+    w.procs = [defaultProc(52)];
+    await ticks(20);
     expect(w.reopened).toEqual([]);
     expect(w.terminated).toEqual([]);
   });
@@ -90,13 +120,58 @@ describe('reopening a Claude profile after an update', () => {
     const { w, tick, ticks } = world();
     w.procs = [profileProc(10), defaultProc(5)];
     await ticks(2);
-    w.procs = [defaultProc(5)];
+    w.procs = [defaultProc(5), defaultProc(20)];
     w.version = '2.0';
     await tick();
-    await ticks(5);
+    await ticks(SETTLE_TICKS);
     expect(w.reopened).toEqual(['desk-work']);
     expect(w.terminated).toEqual([]);
     expect(w.events[0]).toMatchObject({ type: 'reopened', closedDefault: false });
+  });
+
+  it('keeps your default window when it restarts for the same update a moment earlier', async () => {
+    const { w, tick, ticks } = world();
+    w.procs = [profileProc(10), defaultProc(5)];
+    await ticks(2);
+    w.procs = [profileProc(10)]; // the default quits first
+    await tick();
+    w.procs = [];
+    w.version = '2.0';
+    await tick();
+    w.procs = [defaultProc(6)]; // and comes back
+    await ticks(SETTLE_TICKS);
+    expect(w.reopened).toEqual(['desk-work']);
+    expect(w.terminated).toEqual([]);
+  });
+
+  it('still knows about your default window after a tick without targets', async () => {
+    const { w, tick, ticks } = world();
+    w.procs = [profileProc(10), defaultProc(5)];
+    await ticks(2);
+    const saved = w.targets;
+    w.targets = [];
+    await tick();
+    w.targets = saved;
+    w.procs = [profileProc(10), defaultProc(5)];
+    await tick(); // tracking starts again
+    w.procs = [defaultProc(5), defaultProc(20)];
+    w.version = '2.0';
+    await tick();
+    await ticks(SETTLE_TICKS);
+    expect(w.terminated).toEqual([]);
+  });
+
+  it('forgets a profile removed while it waits', async () => {
+    const { w, tick, ticks } = world();
+    w.procs = [profileProc(10)];
+    await ticks(2);
+    w.procs = [defaultProc(20)];
+    w.version = '2.0';
+    await tick();
+    w.targets = [];
+    await ticks(SETTLE_TICKS);
+    expect(w.reopened).toEqual([]);
+    expect(w.terminated).toEqual([]);
   });
 
   it('starts over after the Mac slept instead of acting on what changed meanwhile', async () => {
@@ -111,32 +186,32 @@ describe('reopening a Claude profile after an update', () => {
     expect(w.terminated).toEqual([]);
   });
 
+  it("doesn't take a folder whose name continues with a space for another profile", async () => {
+    const short = desk('desk-my', '/u/My');
+    const long = desk('desk-my-work', '/u/My Work');
+    const { w, tick, ticks } = world([target(short), target(long)]);
+    w.procs = [profileProc(10, short), profileProc(11, long)];
+    await ticks(2);
+    w.procs = [profileProc(11, long), defaultProc(20)]; // only "My" quits
+    w.version = '2.0';
+    await tick();
+    await ticks(SETTLE_TICKS);
+    expect(w.reopened).toEqual(['desk-my']);
+  });
+
   it('reports a reopen that fails, without retrying it', async () => {
-    const events: WatchEvent[] = [];
-    let t = 0;
-    let procs = [profileProc(10)];
-    let version = '1.0';
     let tries = 0;
-    const watcher = new UpdateRelaunchWatcher({
-      now: () => t,
-      processes: async () => procs,
-      appVersion: async () => version,
-      reopen: async () => {
-        tries++;
-        throw new Error('Claude.app was not found');
-      },
-      terminate: () => {},
-      report: (e) => void events.push(e),
+    const { w, tick, ticks } = world([target(work)], async () => {
+      tries++;
+      throw new Error('Claude.app was not found');
     });
-    const tick = async () => {
-      t += 3000;
-      await watcher.tick([target]);
-    };
-    for (let i = 0; i < 2; i++) await tick();
-    procs = [];
-    version = '2.0';
-    for (let i = 0; i < 12; i++) await tick();
+    w.procs = [profileProc(10)];
+    await ticks(2);
+    w.procs = [defaultProc(20)];
+    w.version = '2.0';
+    await tick();
+    await ticks(SETTLE_TICKS + 5);
     expect(tries).toBe(1);
-    expect(events).toEqual([expect.objectContaining({ type: 'reopen-failed', message: 'Claude.app was not found' })]);
+    expect(w.events).toEqual([expect.objectContaining({ type: 'reopen-failed', message: 'Claude.app was not found' })]);
   });
 });

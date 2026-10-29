@@ -6,6 +6,7 @@ export const API_METHODS = [
   'setShare',
   'applyAll',
   'undo',
+  'skipUnfinishedUndo',
   'doctor',
   'itemText',
   'addLibraryItem',

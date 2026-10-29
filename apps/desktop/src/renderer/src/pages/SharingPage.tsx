@@ -43,6 +43,8 @@ function blockers(plan: Plan) {
 export function SharingPage({ notify }: { notify: Notify }) {
   const [matrix, setMatrix] = useState<Matrix>();
   const [busy, setBusy] = useState(false);
+  /** Label of an undo that stopped partway, offered to finish or give up on. */
+  const [unfinished, setUnfinished] = useState<string>();
   const [confirmMcp, setConfirmMcp] = useState<Pending>();
   const [followUp, setFollowUp] = useState<{ req: Pending; plan: Plan }>();
 
@@ -91,16 +93,37 @@ export function SharingPage({ notify }: { notify: Notify }) {
   };
 
   const undo = async () => {
-    const r = await api.undo().catch((e) => (notify(errorText(e), 'bad'), undefined));
-    if (r === undefined) return load();
-    if (!r) notify('Nothing to undo.', 'info');
-    else if (r.failed.length) {
-      notify(`Undid part of "${r.label}". ${plural(r.failed.length, 'change')} couldn't be reversed: ${r.failed[0]}. Fix that and press Undo again to finish.`, 'bad');
-    } else {
-      const kept = r.kept.length ? ` Left ${plural(r.kept.length, 'edited file')} as they are.` : '';
-      notify(`${r.resumed ? 'Finished undoing' : 'Undid'} "${r.label}" (${plural(r.reverted, 'change')}).${kept}`, r.kept.length ? 'info' : 'ok');
+    setBusy(true);
+    try {
+      const r = await api.undo();
+      if (!r) notify('Nothing to undo.', 'info');
+      else if (r.failed.length) {
+        setUnfinished(r.label);
+        notify(`Undid part of "${r.label}". ${plural(r.failed.length, 'change')} couldn't be reversed: ${r.failed[0]}`, 'bad');
+      } else {
+        setUnfinished(undefined);
+        const kept = r.kept.length ? ` Left ${plural(r.kept.length, 'thing')} as ${r.kept.length === 1 ? 'it was' : 'they were'} (changed since, or something new in the way).` : '';
+        notify(`${r.resumed ? 'Finished undoing' : 'Undid'} "${r.label}" (${plural(r.reverted, 'change')}).${kept}`, r.kept.length ? 'info' : 'ok');
+      }
+    } catch (e) {
+      notify(errorText(e), 'bad');
+    } finally {
+      setBusy(false);
+      load();
     }
-    load();
+  };
+
+  const skipUnfinished = async () => {
+    setBusy(true);
+    try {
+      const r = await api.skipUnfinishedUndo();
+      setUnfinished(undefined);
+      if (r) notify(`Stopped undoing "${r.label}"; ${plural(r.left, 'change')} not reversed. Undo now goes to the change before it.`, 'info');
+    } catch (e) {
+      notify(errorText(e), 'bad');
+    } finally {
+      setBusy(false);
+    }
   };
 
   if (!matrix) return <PageHeader title="Sharing" subtitle="Loading…" />;
@@ -126,6 +149,20 @@ export function SharingPage({ notify }: { notify: Notify }) {
           </>
         }
       />
+
+      {unfinished && (
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-bad/40 bg-bad/10 px-3 py-2 text-[12.5px]">
+          <span className="flex-1">
+            Undoing "{unfinished}" stopped partway. Fix what blocked it and press Undo again to finish, or give up on the rest.
+          </span>
+          <Button onClick={undo} disabled={busy}>
+            Try again
+          </Button>
+          <Button variant="ghost" onClick={skipUnfinished} disabled={busy}>
+            Give up on the rest
+          </Button>
+        </div>
+      )}
 
       {matrix.everyone.map((e) => (
         <div key={e.path} className="mb-3 rounded-lg border border-warn/40 bg-warn/10 px-3 py-2 text-[12.5px]">

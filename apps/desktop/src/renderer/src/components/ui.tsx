@@ -20,6 +20,7 @@ export function Button({
   }[variant];
   return (
     <button
+      type="button"
       {...props}
       className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[12.5px] font-medium transition disabled:opacity-50 disabled:pointer-events-none ${styles} ${className}`}
     />
@@ -66,7 +67,13 @@ export function Dialog({ title, children, onClose }: { title: string; children: 
   }, [onClose]);
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4" onMouseDown={onClose}>
-      <div className="w-full max-w-lg rounded-xl border border-line bg-panel shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        className="w-full max-w-lg rounded-xl border border-line bg-panel shadow-2xl"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
         <div className="border-b border-line px-4 py-3 font-semibold">{title}</div>
         <div className="p-4">{children}</div>
       </div>

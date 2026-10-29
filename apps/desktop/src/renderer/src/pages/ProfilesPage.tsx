@@ -49,13 +49,13 @@ export function ProfilesPage({ notify }: { notify: Notify }) {
   // One card per account: an app that runs on a CLI profile's folder joins that profile's card.
   const accounts = (views ?? [])
     .filter((v) => v.account === v.profile.id || !views?.some((o) => o.profile.id === v.account))
-    .map((primary) => ({ primary, members: (views ?? []).filter((v) => v === primary || (v.account === primary.profile.id && v !== primary)) }));
+    .map((primary) => ({ primary, members: [primary, ...(views ?? []).filter((v) => v !== primary && v.account === primary.profile.id)] }));
 
   return (
     <>
       <PageHeader
         title="Profiles"
-        subtitle="One card per account. A terminal tool and the desktop app that shares its login are listed together; each keeps its own folder."
+        subtitle="One card per account. A desktop app that runs on a terminal profile's folder (Claude Desktop's Code tab, the ChatGPT/Codex app) is listed with it."
         actions={
           <>
             <Button onClick={() => setImporting(true)}>Import existing…</Button>
@@ -75,7 +75,7 @@ export function ProfilesPage({ notify }: { notify: Notify }) {
               <ProfileIcon id={primary.profile.id} size={40} version={iconVersion} />
               <div className="min-w-0 flex-1">
                 <div className="truncate text-[14px] font-semibold">{primary.profile.label}</div>
-                <div className="truncate text-[12px] text-muted">{members.map((m) => m.toolName).join(' · ')}</div>
+                <div className="truncate text-[12px] text-muted">{[...new Set(members.map((m) => m.toolName))].join(' · ')}</div>
               </div>
             </div>
             {members.map((v) => (
@@ -129,11 +129,11 @@ export function ProfilesPage({ notify }: { notify: Notify }) {
         <EditDialog
           view={editing}
           onClose={() => setEditing(undefined)}
-          onSaved={() => {
+          onSaved={(launcher) => {
             setEditing(undefined);
             setIconVersion((n) => n + 1);
             load();
-            notify(editing.launcher ? 'Saved. Its launcher was renamed; Update launcher refreshes the icon.' : 'Saved.', 'ok');
+            notify(launcher ? `Saved, and updated its launcher ${launcher}.` : 'Saved.', 'ok');
           }}
           onRemove={() => {
             setRemoving(editing);
@@ -188,7 +188,7 @@ function EditDialog({
 }: {
   view: ProfileView;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (launcher?: string) => void;
   onRemove: () => void;
   notify: Notify;
 }) {
@@ -206,8 +206,7 @@ function EditDialog({
 
   const save = async () => {
     try {
-      await api.updateProfile(view.profile.id, { label, icon: { ...(badge ? { badge } : {}), color } });
-      onSaved();
+      onSaved(await api.updateProfile(view.profile.id, { label, icon: { ...(badge ? { badge } : {}), color } }));
     } catch (e) {
       notify(errorText(e), 'bad');
     }
@@ -270,13 +269,14 @@ function EditDialog({
 function RemoveDialog({ view, onClose, onDone, notify }: { view: ProfileView; onClose: () => void; onDone: () => void; notify: Notify }) {
   const { id, label, tool } = view.profile;
   const [info, setInfo] = useState<RemovalInfo>();
+  const [loadError, setLoadError] = useState<string>();
   const [unshare, setUnshare] = useState(true);
   const [trash, setTrash] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    api.removalInfo(id).then(setInfo).catch((e) => notify(errorText(e), 'bad'));
-  }, [id, notify]);
+    api.removalInfo(id).then(setInfo).catch((e) => setLoadError(errorText(e)));
+  }, [id]);
 
   const run = async () => {
     setBusy(true);
@@ -297,7 +297,9 @@ function RemoveDialog({ view, onClose, onDone, notify }: { view: ProfileView; on
   const blocked = !!info?.usedBy.length;
   return (
     <Dialog title={`Remove ${label}?`} onClose={onClose}>
-      {!info ? (
+      {loadError ? (
+        <p className="text-bad">{loadError}</p>
+      ) : !info ? (
         <p className="text-muted">Checking…</p>
       ) : blocked ? (
         <p>
@@ -324,7 +326,7 @@ function RemoveDialog({ view, onClose, onDone, notify }: { view: ProfileView; on
                 <input type="checkbox" className="mt-1" checked={unshare} onChange={(e) => setUnshare(e.target.checked)} />
                 <span>
                   Also take out the {plural(info.shared, 'item')} AI-Hub shared into it
-                  <span className="block text-[12px] text-muted">Undo on the Sharing page puts them back.</span>
+                  <span className="block text-[12px] text-muted">Undo on the Sharing page puts the files back. Plugins stay installed.</span>
                 </span>
               </label>
             ))}
@@ -334,16 +336,19 @@ function RemoveDialog({ view, onClose, onDone, notify }: { view: ProfileView; on
               <span>
                 Move its folder to the Trash
                 <span className="block text-[12px] text-muted">
-                  Deletes this profile's login, settings and history.
+                  Deletes this profile's login, settings and history. Quit it first, including terminal sessions.
                   {tool === 'claude-code' ? ' The Claude Code login saved in the Keychain stays; run /logout in it first to remove that too.' : ''}
                 </span>
               </span>
             </label>
           )}
+          {!info.canTrash && info.sharesFolderWith.length > 0 && (
+            <p className="text-[12px] text-muted">Its folder stays: {info.sharesFolderWith.join(', ')} uses it too.</p>
+          )}
         </div>
       )}
       <div className="mt-5 flex justify-end gap-2">
-        <Button variant="ghost" onClick={onClose}>
+        <Button variant="ghost" onClick={onClose} disabled={busy}>
           Cancel
         </Button>
         <Button variant="danger" onClick={run} disabled={!info || blocked || busy}>
@@ -469,11 +474,19 @@ function NewAccountDialog({ onClose, onDone, notify }: { onClose: () => void; on
 
   return (
     <Dialog title="New profile" onClose={onClose}>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!busy && name.trim() && !(kind === 'web' && !browser)) void run();
+        }}
+      >
       <div className="space-y-4">
         <div className="grid grid-cols-2 gap-2">
           {KINDS.map((k) => (
             <button
               key={k.kind}
+              type="button"
+              aria-pressed={kind === k.kind}
               onClick={() => setKind(k.kind)}
               className={`rounded-lg border p-2.5 text-left ${kind === k.kind ? 'border-accent bg-accent/10' : 'border-line hover:border-muted'}`}
             >
@@ -493,8 +506,8 @@ function NewAccountDialog({ onClose, onDone, notify }: { onClose: () => void; on
               Also open it in {appName}
               <span className="block text-[12px] text-muted">
                 {kind === 'claude'
-                  ? "Same account in both. The app's Code tab uses the terminal profile's folder."
-                  : 'Same account and folder in both.'}
+                  ? "The app's Code tab uses this profile's folder. Sign in once in each: the app keeps its own login."
+                  : 'Both use the same folder, so one sign-in covers both.'}
               </span>
             </span>
           </label>
@@ -540,10 +553,11 @@ function NewAccountDialog({ onClose, onDone, notify }: { onClose: () => void; on
         <Button variant="ghost" onClick={onClose}>
           Cancel
         </Button>
-        <Button variant="primary" onClick={run} disabled={busy || !name.trim() || (kind === 'web' && !browser)}>
+        <Button type="submit" variant="primary" disabled={busy || !name.trim() || (kind === 'web' && !browser)}>
           Create
         </Button>
       </div>
+      </form>
     </Dialog>
   );
 }

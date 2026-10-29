@@ -288,13 +288,12 @@ profile
 profile
   .command('remove <id>')
   .description("Stop tracking a profile (its folder and login are kept)")
-  .option('--unshare', 'first take out what the hub shared into it (`aihub undo` puts it back)')
+  .option('--unshare', 'first take out what the hub shared into it, except plugins (`aihub undo` puts it back)')
   .option('--trash', 'move its folder to the Trash, login and history included (only folders the hub created)')
   .action(
     action(async (id: string, opts: { unshare?: boolean; trash?: boolean }) => {
       if (opts.unshare && opts.trash) throw new Error('Use --unshare or --trash, not both (the Trash takes everything).');
-      const hub = await loadHub(ctx);
-      const r = await deleteProfile(ctx, hub, id, {
+      const r = await deleteProfile(ctx, id, {
         unshare: opts.unshare,
         ...(opts.trash ? { trash: (dir: string) => moveToTrash(ctx, dir) } : {}),
       });

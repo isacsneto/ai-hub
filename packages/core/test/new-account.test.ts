@@ -33,7 +33,7 @@ describe('new accounts from the app', () => {
     const { ctx, hub } = await setup();
     const made = await createAccount(ctx, hub, { kind: 'codex', name: 'Side project', app: true });
     expect(made.map((p) => p.id)).toEqual(['codex-side-project', 'chatgpt-side-project']);
-    expect(made[1]).toMatchObject({ tool: 'codex-desktop', codexHome: '~/.aihub/profiles/codex-side-project', label: 'ChatGPT · Side Project' });
+    expect(made[1]).toMatchObject({ tool: 'codex-desktop', codexHome: '~/.aihub/profiles/codex-side-project', label: 'ChatGPT · Side project' });
   });
 
   it('creates only the terminal profile when the app is off, and web accounts per site', async () => {
@@ -49,4 +49,26 @@ describe('new accounts from the app', () => {
     await expect(createAccount(ctx, hub, { kind: 'web', name: 'X', url: 'file:///etc/passwd', browser: 'chrome' })).rejects.toThrow(/web address/);
     expect((await loadHub(ctx)).profiles).toHaveLength(1);
   });
+
+  it('keeps the name as typed, fits long names into ids, and creates nothing when one part fails', async () => {
+    const { home, ctx, hub } = await setup();
+    const [cc, desk] = await createAccount(ctx, hub, { kind: 'claude', name: 'Société Générale Holdings International Group', app: true });
+    expect(cc!.label).toBe('Claude Code · Société Générale Holdings International Group');
+    expect(desk!.id.length).toBeLessThanOrEqual(40);
+    expect(desk!.id).toMatch(/^claude-desktop-soci/);
+
+    const before = (await loadHub(ctx)).profiles.length;
+    await expect(createAccount(ctx, hub, { kind: 'web', name: 'Bad', url: 'https://x.test', browser: 'netscape' } as never)).rejects.toThrow();
+    expect((await loadHub(ctx)).profiles).toHaveLength(before);
+    await expect(fs.access(`${home}/.aihub/profiles/web-bad`)).rejects.toThrow();
+  });
+
+  it("doesn't reuse the folder of a profile that was removed but kept", async () => {
+    const { home, ctx, hub } = await setup();
+    await fs.mkdir(`${home}/.aihub/profiles/claude-work`, { recursive: true });
+    await fs.writeFile(`${home}/.aihub/profiles/claude-work/.credentials.json`, '{"old":true}');
+    const [p] = await createAccount(ctx, hub, { kind: 'claude', name: 'Work', app: false });
+    expect(p!.id).toBe('claude-work-2');
+  });
 });
+

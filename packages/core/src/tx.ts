@@ -186,7 +186,6 @@ async function revert(o: Op): Promise<void> {
       await fs.rm(o.path, { recursive: true, force: true });
       return;
     case 'write':
-      if (o.records) return revertRecords(o.path, o.backup);
       if (await changedSince(o)) throw new Kept('edited since the hub wrote it; left as is');
       if (o.backup) await fs.copyFile(o.backup, o.path);
       else await fs.rm(o.path, { force: true });
@@ -205,35 +204,56 @@ async function revert(o: Op): Promise<void> {
   }
 }
 
+const overlaps = (a: string, b: string) => a === b || a.startsWith(b + path.sep) || b.startsWith(a + path.sep);
+
 /**
- * Install records go back to how they were, except plugin records: undo never uninstalls plugins,
- * and plugin installs are recorded after the transaction, so their current records stay true.
+ * Install records go back to how they were, except plugin records (undo never uninstalls plugins,
+ * and plugin installs are recorded after the transaction, so their current records stay true) and
+ * records for files undo left as they are (their current records still describe them).
  */
-async function revertRecords(file: string, backup: string | undefined): Promise<void> {
-  type Records = { version: 1; installs: { kind: string }[] };
+async function revertRecords(file: string, backup: string | undefined, keptPaths: string[]): Promise<void> {
+  type Records = { version: 1; installs: { kind: string; path: string }[] };
   const now = ((await readJsonIfExists(file)) as Records | undefined)?.installs ?? [];
   const before = backup ? (((await readJsonIfExists(backup)) as Records | undefined)?.installs ?? []) : [];
-  const installs = [...before.filter((r) => r.kind !== 'plugins'), ...now.filter((r) => r.kind === 'plugins')];
+  const stays = (r: { kind: string; path: string }) => r.kind === 'plugins' || keptPaths.some((k) => overlaps(k, r.path));
+  const installs = [...before.filter((r) => !stays(r)), ...now.filter(stays)];
   await atomicWrite(file, JSON.stringify({ version: 1, installs }, null, 2) + '\n');
 }
 
+/**
+ * Reverse ops newest first. Once one fails, older ops on the same path wait for it (reverting them
+ * now would see the newer change still in place and wrongly give up on them); they all stay for the
+ * retry. Records files go last, so they know which files were left as they are.
+ */
 async function revertAll(ops: Op[]): Promise<{ kept: string[]; failed: string[]; remaining: Op[] }> {
   const kept: string[] = [];
   const failed: string[] = [];
-  const remaining: Op[] = [];
-  for (const o of [...ops].reverse()) {
+  const stuck = new Set<Op>();
+  const keptPaths: string[] = [];
+  const newestFirst = [...ops].reverse();
+  const isRecords = (o: Op) => o.op === 'write' && !!o.records;
+  for (const o of [...newestFirst.filter((o) => !isRecords(o)), ...newestFirst.filter(isRecords)]) {
+    if ([...stuck].some((f) => overlaps(f.path, o.path))) {
+      stuck.add(o);
+      if (o.op !== 'mkdir') failed.push(`${o.op} ${o.path}: waits for the newer change above`);
+      continue;
+    }
     try {
-      await revert(o);
+      if (o.op === 'write' && o.records) await revertRecords(o.path, o.backup, keptPaths);
+      else await revert(o);
     } catch (err) {
       const line = `${o.op} ${o.path}: ${(err as Error).message}`;
-      if (err instanceof Kept) kept.push(line);
-      else {
+      if (err instanceof Kept) {
+        kept.push(line);
+        keptPaths.push(o.path);
+      } else {
         failed.push(line);
-        remaining.unshift(o); // keeps the original order, so a retry reverses in reverse again
+        stuck.add(o);
       }
     }
   }
-  return { kept, failed, remaining };
+  // The original order, so a retry reverses newest first again.
+  return { kept, failed, remaining: ops.filter((o) => stuck.has(o)) };
 }
 
 /** Run `fn` in a transaction, holding the hub lock: commit on success, roll everything back on failure. */
@@ -247,7 +267,7 @@ export async function withTransaction<T>(ctx: Context, label: string, fn: (tx: T
     } catch (err) {
       const problems = await tx.rollback();
       if (problems.length) {
-        (err as Error).message += `\nRollback was incomplete:\n  ${problems.join('\n  ')}`;
+        (err as Error).message += `\nRollback was incomplete:\n  ${problems.join('\n  ')}\nFix that and run \`aihub undo\` (or Undo in the app) to finish it.`;
       }
       throw err;
     }
@@ -263,7 +283,7 @@ export async function undoLast(ctx: Context): Promise<UndoResult | undefined> {
 }
 
 /** The newest journal not yet undone (uncommitted ones are runs that crashed midway). */
-async function lastOpenJournal(ctx: Context): Promise<{ file: string; journal: Journal } | undefined> {
+async function lastOpenJournal(ctx: Context, which: (j: Journal) => boolean = () => true): Promise<{ file: string; journal: Journal } | undefined> {
   let dirs: string[];
   try {
     dirs = (await fs.readdir(journalRoot(ctx))).sort().reverse();
@@ -273,7 +293,7 @@ async function lastOpenJournal(ctx: Context): Promise<{ file: string; journal: J
   for (const d of dirs) {
     const file = path.join(journalRoot(ctx), d, 'journal.json');
     const journal = (await readJsonIfExists(file)) as Journal | undefined;
-    if (journal && !journal.undone) return { file, journal };
+    if (journal && !journal.undone && which(journal)) return { file, journal };
   }
   return undefined;
 }
@@ -301,8 +321,9 @@ async function undoLastUnlocked(ctx: Context): Promise<UndoResult | undefined> {
  */
 export async function abandonUnfinishedUndo(ctx: Context): Promise<{ label: string; left: number } | undefined> {
   return withHubLock(ctx, async () => {
-    const open = await lastOpenJournal(ctx);
-    if (!open?.journal.unfinished) return undefined;
+    // The newest undo that stopped partway, even if later runs came after it.
+    const open = await lastOpenJournal(ctx, (j) => !!j.unfinished);
+    if (!open) return undefined;
     const { file, journal } = open;
     journal.undone = new Date().toISOString();
     await atomicWrite(file, JSON.stringify(journal, null, 2) + '\n');
