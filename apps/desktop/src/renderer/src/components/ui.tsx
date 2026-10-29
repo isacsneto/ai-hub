@@ -1,4 +1,4 @@
-import { useEffect, useState, type ButtonHTMLAttributes, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from 'react';
 import { api } from '../api';
 
 /** "1 profile", "3 profiles". */
@@ -6,6 +6,25 @@ export const plural = (n: number, word: string, many = `${word}s`) => `${n} ${n 
 
 /** First letter of the part of a label that tells profiles apart ("Claude Code · Work" → "W"); matches core's labelInitial. */
 export const labelInitial = (label: string) => (label.split('·').pop() ?? label).replace(/[^\p{L}\p{N}]/gu, '').charAt(0).toUpperCase();
+
+/**
+ * Run `refresh` when the user comes back to the window (after signing in to a tool, say), at most
+ * once per `minMs`, so pages show what changed outside the app.
+ */
+export function useRefreshOnFocus(refresh: () => void, minMs = 2000) {
+  const last = useRef(Date.now());
+  const latest = useRef(refresh);
+  latest.current = refresh;
+  useEffect(() => {
+    const onFocus = () => {
+      if (Date.now() - last.current < minMs) return;
+      last.current = Date.now();
+      latest.current();
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [minMs]);
+}
 
 export function Button({
   variant = 'default',

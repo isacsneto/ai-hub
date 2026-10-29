@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, errorText, type Candidate, type ProfileView, type RemovalInfo } from '../api';
 import type { Notify } from '../App';
-import { Button, Chip, Dialog, Empty, PageHeader, ProfileIcon, labelInitial, plural } from '../components/ui';
+import { Button, Chip, Dialog, Empty, PageHeader, ProfileIcon, labelInitial, plural, useRefreshOnFocus } from '../components/ui';
 
 const COLORS = ['#3B7DD8', '#5DCAA5', '#E0A55E', '#7C5CC4', '#D25F8C', '#4CA9B2', '#6B7280'];
 
@@ -36,6 +36,7 @@ export function ProfilesPage({ notify }: { notify: Notify }) {
     api.profiles().then(setViews).catch((e) => notify(errorText(e), 'bad'));
   }, [notify]);
   useEffect(load, [load]);
+  useRefreshOnFocus(load);
 
   const launch = async (v: ProfileView) => {
     try {

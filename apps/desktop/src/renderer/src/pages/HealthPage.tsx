@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, errorText, type DoctorReport, type ProfileView } from '../api';
-import { Button, Chip, PageHeader, plural } from '../components/ui';
+import { Button, Chip, PageHeader, plural, useRefreshOnFocus } from '../components/ui';
 
 type Finding = DoctorReport['findings'][number];
 
@@ -29,6 +29,10 @@ export function HealthPage() {
   useEffect(() => {
     api.profiles().then(setViews).catch(() => undefined);
   }, []);
+  // The checks run each tool, so not on every focus: at most every 15 seconds.
+  useRefreshOnFocus(() => {
+    if (!running) run();
+  }, 15_000);
 
   const labels = Object.fromEntries(views.map((v) => [v.profile.id, v.profile.label]));
   const toolNames: Record<string, string> = Object.fromEntries(views.map((v) => [v.profile.tool, v.toolName]));
