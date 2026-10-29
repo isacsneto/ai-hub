@@ -4,7 +4,7 @@ import type { Candidate } from './discover.js';
 import { saveHub, timestamp, type Hub, type Profile, type ToolId } from './config.js';
 import type { Context } from './context.js';
 import { atomicWrite, ensureDir, isDirectory } from './fsx.js';
-import { contractHome } from './paths.js';
+import { contractHome, resolvePath } from './paths.js';
 
 export function getProfile(hub: Hub, id: string): Profile {
   const p = hub.profiles.find((q) => q.id === id);
@@ -51,6 +51,20 @@ export function defaultLabel(tool: ToolId, id: string, url?: string): string {
 
 export function profileRoot(ctx: Context, p: Profile): string {
   return adapterFor(p).paths(ctx, p).root;
+}
+
+/**
+ * The profile whose card this one shares: a desktop app that runs on a CLI profile's folder (Claude
+ * Desktop's Code tab, the ChatGPT/Codex app's CODEX_HOME) is the same account, opened another way.
+ */
+export function accountOf(ctx: Context, hub: Hub, p: Profile): string {
+  if (p.tool === 'claude-desktop' && p.codeProfile && hub.profiles.some((q) => q.id === p.codeProfile)) return p.codeProfile;
+  if (p.tool === 'codex-desktop') {
+    const home = resolvePath(p.codexHome, ctx.home);
+    const cli = hub.profiles.find((q) => q.tool === 'codex' && profileRoot(ctx, q) === home);
+    if (cli) return cli.id;
+  }
+  return p.id;
 }
 
 /** Two profiles of the same tool on the same folder would share login, MCP and history. */

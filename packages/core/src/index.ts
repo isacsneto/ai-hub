@@ -20,6 +20,8 @@ export * from './shell.js';
 export * from './backup.js';
 export * from './matrix.js';
 export * from './relaunch-watch.js';
+export * from './remove-profile.js';
+export * from './new-account.js';
 export { readPlistString } from './plist.js';
 export { plural } from './text.js';
 export { AIHUB_VERSION } from './version.js';

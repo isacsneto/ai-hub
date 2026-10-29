@@ -2,20 +2,25 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  accountOf,
   adapterFor,
   addToLibrary,
   appVersion,
   applyImport,
   buildLauncher,
   contractHome,
+  createAccount,
   createContext,
+  deleteProfile,
   discover,
   doctor,
   getLibraryItem,
   ITEM_KINDS,
   SHARE_KINDS,
   getProfile,
+  installedBrowsers,
   isolationFor,
+  launcherPath,
   launchProfile,
   listProcesses,
   loadHub,
@@ -24,6 +29,7 @@ import {
   reconcile,
   reconcileAll,
   relabelProfile,
+  removalInfo,
   renderIcon,
   saveHub,
   setSharing,
@@ -34,6 +40,7 @@ import {
   watchTargets,
   withHubLock,
   type ItemKind,
+  type NewAccount,
   type Profile,
   type ShareKind,
 } from '@aihub/core';
@@ -130,6 +137,8 @@ const api = {
           identity: await adapter.identity(ctx, p),
           folder: contractHome(adapter.paths(ctx, p).root, ctx.home),
           tested: isolationFor(p),
+          account: accountOf(ctx, hub, p),
+          launcher: (await fs.stat(launcherPath(ctx, hub, p)).catch(() => undefined)) ? contractHome(launcherPath(ctx, hub, p), ctx.home) : undefined,
         };
       }),
     );
@@ -197,6 +206,42 @@ const api = {
     if (patch.icon) p.icon = { ...p.icon, ...patch.icon };
     await saveHub(ctx, hub);
     refreshTray();
+  },
+
+  async installedBrowsers() {
+    return installedBrowsers(ctx);
+  },
+
+  async newAccount(spec: NewAccount) {
+    if (!spec || typeof spec !== 'object' || !['claude', 'codex', 'cursor', 'web'].includes((spec as { kind?: string }).kind ?? '')) {
+      throw new Error('Unknown kind of account.');
+    }
+    const made = await withHubLock(ctx, async () => createAccount(ctx, await loadHub(ctx), spec));
+    refreshTray();
+    return made.map((p) => ({ id: p.id, label: p.label, tool: p.tool }));
+  },
+
+  /** Build (or rebuild) one profile's launcher app and show it in the Finder, ready to drag to the Dock. */
+  async makeLauncher(id: string) {
+    const hub = await loadHub(ctx);
+    const app = await buildLauncher(ctx, hub, getProfile(hub, id));
+    shell.showItemInFolder(app);
+    return contractHome(app, ctx.home);
+  },
+
+  async removalInfo(id: string) {
+    return removalInfo(ctx, await loadHub(ctx), id);
+  },
+
+  async removeProfile(id: string, opts: { unshare?: boolean; trash?: boolean }) {
+    const hub = await loadHub(ctx);
+    const r = await deleteProfile(ctx, hub, id, {
+      unshare: !!opts.unshare,
+      // The Finder's Trash, so Put Back works.
+      ...(opts.trash ? { trash: (dir: string) => shell.trashItem(dir) } : {}),
+    });
+    refreshTray();
+    return r;
   },
 
   async launch(id: string) {

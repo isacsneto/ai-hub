@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, errorText, type Candidate, type ProfileView } from '../api';
+import { api, errorText, type Candidate, type ProfileView, type RemovalInfo } from '../api';
 import type { Notify } from '../App';
 import { Button, Chip, Dialog, Empty, PageHeader, ProfileIcon, labelInitial, plural } from '../components/ui';
 
@@ -17,7 +17,9 @@ function AccountLine({ v }: { v: ProfileView }) {
 export function ProfilesPage({ notify }: { notify: Notify }) {
   const [views, setViews] = useState<ProfileView[]>();
   const [editing, setEditing] = useState<ProfileView>();
+  const [removing, setRemoving] = useState<ProfileView>();
   const [importing, setImporting] = useState(false);
+  const [adding, setAdding] = useState(false);
   const [iconVersion, setIconVersion] = useState(0);
 
   const load = useCallback(() => {
@@ -34,41 +36,55 @@ export function ProfilesPage({ notify }: { notify: Notify }) {
     }
   };
 
-  const buildLaunchers = async () => {
-    const res = await api.buildLaunchers();
-    const bad = res.filter((r) => r.error);
-    notify(
-      bad.length ? `${plural(bad.length, 'launcher')} failed: ${bad[0]!.error}` : `Built ${plural(res.length, 'launcher')} in ~/Applications/AI-Hub`,
-      bad.length ? 'bad' : 'ok',
-    );
+  const makeLauncher = async (v: ProfileView) => {
+    try {
+      const app = await api.makeLauncher(v.profile.id);
+      notify(`${v.launcher ? 'Updated' : 'Created'} ${app}. Drag it from the Finder to the Dock; Spotlight finds it too.`, 'ok');
+      load();
+    } catch (e) {
+      notify(errorText(e), 'bad');
+    }
   };
+
+  // One card per account: an app that runs on a CLI profile's folder joins that profile's card.
+  const accounts = (views ?? [])
+    .filter((v) => v.account === v.profile.id || !views?.some((o) => o.profile.id === v.account))
+    .map((primary) => ({ primary, members: (views ?? []).filter((v) => v === primary || (v.account === primary.profile.id && v !== primary)) }));
 
   return (
     <>
       <PageHeader
         title="Profiles"
-        subtitle="Each profile is one account in one tool, with its own login, MCP servers and history."
+        subtitle="One card per account. A terminal tool and the desktop app that shares its login are listed together; each keeps its own folder."
         actions={
           <>
             <Button onClick={() => setImporting(true)}>Import existing…</Button>
-            <Button onClick={buildLaunchers} disabled={!views?.length}>Build Dock launchers</Button>
+            <Button variant="primary" onClick={() => setAdding(true)}>
+              New profile…
+            </Button>
           </>
         }
       />
       {views && !views.length && (
-        <Empty title="No profiles yet">Import the accounts already on this Mac, or add one with `aihub profile add`.</Empty>
+        <Empty title="No profiles yet">Import the accounts already on this Mac, or create a new one.</Empty>
       )}
       <div className="grid grid-cols-[repeat(auto-fill,minmax(330px,1fr))] gap-3">
-        {views?.map((v) => (
-          <div key={v.profile.id} className="flex flex-col rounded-xl border border-line bg-panel p-4">
-            <div className="flex items-start gap-3">
-              <ProfileIcon id={v.profile.id} size={48} version={iconVersion} />
+        {accounts.map(({ primary, members }) => (
+          <div key={primary.profile.id} className="flex flex-col rounded-xl border border-line bg-panel p-4">
+            <div className="flex items-center gap-3">
+              <ProfileIcon id={primary.profile.id} size={40} version={iconVersion} />
               <div className="min-w-0 flex-1">
-                <div className="truncate text-[14px] font-semibold">{v.profile.label}</div>
-                <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
-                  <Chip>{v.toolName}</Chip>
+                <div className="truncate text-[14px] font-semibold">{primary.profile.label}</div>
+                <div className="truncate text-[12px] text-muted">{members.map((m) => m.toolName).join(' · ')}</div>
+              </div>
+            </div>
+            {members.map((v) => (
+              <div key={v.profile.id} className="mt-3 border-t border-line pt-3">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[13px] font-medium">{v.toolName}</span>
+                  {members.length > 1 && v.profile.label !== primary.profile.label && <span className="text-[12px] text-muted">{v.profile.label}</span>}
                   {v.profile.managedBy && <Chip tone="info" title="The hub only reads this folder until you run `aihub takeover`">managed by {v.profile.managedBy}</Chip>}
-                  {v.profile.tool === 'claude-desktop' && (
+                  {v.profile.tool === 'claude-desktop' && v.account === v.profile.id && (
                     <Chip tone={v.profile.codeProfile ? 'neutral' : 'warn'}>Code tab → {v.profile.codeProfile ?? '~/.claude'}</Chip>
                   )}
                   {v.tested.mcp === 'no' && (
@@ -80,25 +96,32 @@ export function ProfilesPage({ notify }: { notify: Notify }) {
                     <Chip title="Cursor runs with its own HOME, so ~/.cursor (MCP servers, skills) is separate. Experimental.">own home</Chip>
                   )}
                 </div>
+                <div className="mt-1 space-y-0.5 text-[12px]">
+                  <div>
+                    <AccountLine v={v} />
+                  </div>
+                  <div className="truncate font-mono text-[11px] text-muted" title={v.folder}>
+                    {v.folder}
+                  </div>
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <Button variant="primary" onClick={() => launch(v)}>
+                    Launch
+                  </Button>
+                  <Button onClick={() => setEditing(v)}>Edit</Button>
+                  <Button
+                    variant="ghost"
+                    onClick={() => makeLauncher(v)}
+                    title={v.launcher ? `${v.launcher}: rebuild it with the current name and icon` : 'An app with this icon in ~/Applications/AI-Hub, for the Dock and Spotlight'}
+                  >
+                    {v.launcher ? 'Update launcher' : 'Create launcher'}
+                  </Button>
+                  <Button variant="ghost" onClick={() => api.reveal(v.profile.id).catch((e) => notify(errorText(e), 'bad'))}>
+                    Show folder
+                  </Button>
+                </div>
               </div>
-            </div>
-            <div className="mt-3 space-y-0.5 text-[12px]">
-              <div>
-                <AccountLine v={v} />
-              </div>
-              <div className="truncate font-mono text-[11px] text-muted" title={v.folder}>
-                {v.folder}
-              </div>
-            </div>
-            <div className="mt-3 flex gap-2 pt-1">
-              <Button variant="primary" onClick={() => launch(v)}>
-                Launch
-              </Button>
-              <Button onClick={() => setEditing(v)}>Edit</Button>
-              <Button variant="ghost" onClick={() => api.reveal(v.profile.id).catch((e) => notify(errorText(e), 'bad'))}>
-                Show folder
-              </Button>
-            </div>
+            ))}
           </div>
         ))}
       </div>
@@ -110,7 +133,33 @@ export function ProfilesPage({ notify }: { notify: Notify }) {
             setEditing(undefined);
             setIconVersion((n) => n + 1);
             load();
-            notify('Saved. Rebuild launchers to update Dock icons.', 'ok');
+            notify(editing.launcher ? 'Saved. Its launcher was renamed; Update launcher refreshes the icon.' : 'Saved.', 'ok');
+          }}
+          onRemove={() => {
+            setRemoving(editing);
+            setEditing(undefined);
+          }}
+          notify={notify}
+        />
+      )}
+      {removing && (
+        <RemoveDialog
+          view={removing}
+          onClose={() => setRemoving(undefined)}
+          onDone={() => {
+            setRemoving(undefined);
+            load();
+          }}
+          notify={notify}
+        />
+      )}
+      {adding && (
+        <NewAccountDialog
+          onClose={() => setAdding(false)}
+          onDone={(made) => {
+            setAdding(false);
+            load();
+            notify(`Created ${made.map((m) => m.label).join(' and ')}. Launch it to sign in.`, 'ok');
           }}
           notify={notify}
         />
@@ -130,7 +179,19 @@ export function ProfilesPage({ notify }: { notify: Notify }) {
   );
 }
 
-function EditDialog({ view, onClose, onSaved, notify }: { view: ProfileView; onClose: () => void; onSaved: () => void; notify: Notify }) {
+function EditDialog({
+  view,
+  onClose,
+  onSaved,
+  onRemove,
+  notify,
+}: {
+  view: ProfileView;
+  onClose: () => void;
+  onSaved: () => void;
+  onRemove: () => void;
+  notify: Notify;
+}) {
   const [label, setLabel] = useState(view.profile.label);
   const [badge, setBadge] = useState(view.profile.icon?.badge ?? '');
   const [color, setColor] = useState(view.profile.icon?.color ?? COLORS[0]!);
@@ -192,11 +253,101 @@ function EditDialog({ view, onClose, onSaved, notify }: { view: ProfileView; onC
         </div>
       </div>
       <div className="mt-5 flex justify-end gap-2">
+        <Button variant="danger" className="mr-auto" onClick={onRemove}>
+          Remove…
+        </Button>
         <Button variant="ghost" onClick={onClose}>
           Cancel
         </Button>
         <Button variant="primary" onClick={save}>
           Save
+        </Button>
+      </div>
+    </Dialog>
+  );
+}
+
+function RemoveDialog({ view, onClose, onDone, notify }: { view: ProfileView; onClose: () => void; onDone: () => void; notify: Notify }) {
+  const { id, label, tool } = view.profile;
+  const [info, setInfo] = useState<RemovalInfo>();
+  const [unshare, setUnshare] = useState(true);
+  const [trash, setTrash] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api.removalInfo(id).then(setInfo).catch((e) => notify(errorText(e), 'bad'));
+  }, [id, notify]);
+
+  const run = async () => {
+    setBusy(true);
+    try {
+      const r = await api.removeProfile(id, { unshare: unshare && !info?.readOnly, trash });
+      const parts = [`Removed ${label}.`];
+      if (r.trashed) parts.push('Its folder is in the Trash.');
+      if (r.unshared) parts.push(`Took out ${plural(r.unshared, 'shared item')}.`);
+      if (r.leftInPlace) parts.push(`${plural(r.leftInPlace, 'shared item')} stayed in its folder.`);
+      notify(parts.join(' '), 'ok');
+      onDone();
+    } catch (e) {
+      notify(errorText(e), 'bad');
+      setBusy(false);
+    }
+  };
+
+  const blocked = !!info?.usedBy.length;
+  return (
+    <Dialog title={`Remove ${label}?`} onClose={onClose}>
+      {!info ? (
+        <p className="text-muted">Checking…</p>
+      ) : blocked ? (
+        <p>
+          {info.usedBy.join(', ')} {info.usedBy.length === 1 ? 'uses' : 'use'} this profile for its Code tab. Remove{' '}
+          {info.usedBy.length === 1 ? 'that profile' : 'those profiles'} first.
+        </p>
+      ) : (
+        <div className="space-y-3">
+          <p>
+            AI-Hub stops managing this profile.{' '}
+            {trash ? (
+              'Its folder goes to the Trash.'
+            ) : (
+              <>
+                Its folder and login stay where they are: <code className="text-[12px]">{info.folder}</code>
+              </>
+            )}
+          </p>
+          {info.shared > 0 && !trash &&
+            (info.readOnly ? (
+              <p className="text-muted">{plural(info.shared, 'shared item')} stay in the folder, since another tool manages it.</p>
+            ) : (
+              <label className="flex items-start gap-2">
+                <input type="checkbox" className="mt-1" checked={unshare} onChange={(e) => setUnshare(e.target.checked)} />
+                <span>
+                  Also take out the {plural(info.shared, 'item')} AI-Hub shared into it
+                  <span className="block text-[12px] text-muted">Undo on the Sharing page puts them back.</span>
+                </span>
+              </label>
+            ))}
+          {info.canTrash && (
+            <label className="flex items-start gap-2">
+              <input type="checkbox" className="mt-1" checked={trash} onChange={(e) => setTrash(e.target.checked)} />
+              <span>
+                Move its folder to the Trash
+                <span className="block text-[12px] text-muted">
+                  Deletes this profile's login, settings and history.
+                  {tool === 'claude-code' ? ' The Claude Code login saved in the Keychain stays; run /logout in it first to remove that too.' : ''}
+                </span>
+              </span>
+            </label>
+          )}
+        </div>
+      )}
+      <div className="mt-5 flex justify-end gap-2">
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button variant="danger" onClick={run} disabled={!info || blocked || busy}>
+          {trash ? 'Remove and trash folder' : 'Remove'}
         </Button>
       </div>
     </Dialog>
@@ -262,6 +413,135 @@ function ImportDialog({ onClose, onDone, notify }: { onClose: () => void; onDone
         </Button>
         <Button variant="primary" onClick={run} disabled={!picked.size}>
           Import {picked.size || ''}
+        </Button>
+      </div>
+    </Dialog>
+  );
+}
+
+type Kind = 'claude' | 'codex' | 'cursor' | 'web';
+const KINDS: { kind: Kind; title: string; detail: string }[] = [
+  { kind: 'claude', title: 'Claude', detail: 'Claude Code in the terminal, and optionally the Claude desktop app' },
+  { kind: 'codex', title: 'Codex / ChatGPT', detail: 'Codex in the terminal, and optionally the ChatGPT/Codex app' },
+  { kind: 'cursor', title: 'Cursor', detail: 'A separate Cursor window with its own login and settings' },
+  { kind: 'web', title: 'Web account', detail: 'A site like claude.ai or chatgpt.com in its own browser profile' },
+];
+const SITES = [
+  { name: 'Claude', url: 'https://claude.ai' },
+  { name: 'ChatGPT', url: 'https://chatgpt.com' },
+  { name: 'Gemini', url: 'https://gemini.google.com' },
+];
+const BROWSER_NAMES: Record<string, string> = { chrome: 'Chrome', edge: 'Edge', brave: 'Brave', chromium: 'Chromium', vivaldi: 'Vivaldi' };
+
+function NewAccountDialog({ onClose, onDone, notify }: { onClose: () => void; onDone: (made: { id: string; label: string }[]) => void; notify: Notify }) {
+  const [kind, setKind] = useState<Kind>('claude');
+  const [name, setName] = useState('');
+  const [app, setApp] = useState(true);
+  const [isolatedHome, setIsolatedHome] = useState(false);
+  const [url, setUrl] = useState(SITES[0]!.url);
+  const [browsers, setBrowsers] = useState<string[]>();
+  const [browser, setBrowser] = useState<string>();
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api.installedBrowsers().then((b) => {
+      setBrowsers(b);
+      setBrowser(b[0]);
+    }).catch(() => setBrowsers([]));
+  }, []);
+
+  const spec = () => {
+    if (kind === 'claude' || kind === 'codex') return { kind, name, app };
+    if (kind === 'cursor') return { kind, name, isolatedHome };
+    return { kind, name, url, browser: browser as 'chrome' };
+  };
+  const run = async () => {
+    setBusy(true);
+    try {
+      onDone(await api.newAccount(spec()));
+    } catch (e) {
+      notify(errorText(e), 'bad');
+      setBusy(false);
+    }
+  };
+  const field = 'mt-1 w-full rounded-md border border-line bg-bg px-2 py-1.5 outline-none focus:border-accent';
+  const appName = kind === 'claude' ? 'the Claude desktop app' : 'the ChatGPT/Codex app';
+
+  return (
+    <Dialog title="New profile" onClose={onClose}>
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-2">
+          {KINDS.map((k) => (
+            <button
+              key={k.kind}
+              onClick={() => setKind(k.kind)}
+              className={`rounded-lg border p-2.5 text-left ${kind === k.kind ? 'border-accent bg-accent/10' : 'border-line hover:border-muted'}`}
+            >
+              <div className="text-[13px] font-semibold">{k.title}</div>
+              <div className="mt-0.5 text-[11.5px] leading-snug text-muted">{k.detail}</div>
+            </button>
+          ))}
+        </div>
+        <label className="block">
+          <span className="text-[12px] text-muted">Account name</span>
+          <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Work, Acme, Personal…" className={field} />
+        </label>
+        {(kind === 'claude' || kind === 'codex') && (
+          <label className="flex items-start gap-2">
+            <input type="checkbox" className="mt-1" checked={app} onChange={(e) => setApp(e.target.checked)} />
+            <span>
+              Also open it in {appName}
+              <span className="block text-[12px] text-muted">
+                {kind === 'claude'
+                  ? "Same account in both. The app's Code tab uses the terminal profile's folder."
+                  : 'Same account and folder in both.'}
+              </span>
+            </span>
+          </label>
+        )}
+        {kind === 'cursor' && (
+          <label className="flex items-start gap-2">
+            <input type="checkbox" className="mt-1" checked={isolatedHome} onChange={(e) => setIsolatedHome(e.target.checked)} />
+            <span>
+              Keep its MCP servers separate too
+              <span className="block text-[12px] text-muted">Gives Cursor its own home folder, since ~/.cursor is otherwise shared. Experimental.</span>
+            </span>
+          </label>
+        )}
+        {kind === 'web' && (
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="text-[12px] text-muted">Site</span>
+              <input list="aihub-sites" value={url} onChange={(e) => setUrl(e.target.value)} className={field} />
+              <datalist id="aihub-sites">
+                {SITES.map((s) => (
+                  <option key={s.url} value={s.url}>
+                    {s.name}
+                  </option>
+                ))}
+              </datalist>
+            </label>
+            <label className="block">
+              <span className="text-[12px] text-muted">Browser</span>
+              <select value={browser} onChange={(e) => setBrowser(e.target.value)} className={field} disabled={!browsers?.length}>
+                {browsers?.map((b) => (
+                  <option key={b} value={b}>
+                    {BROWSER_NAMES[b] ?? b}
+                  </option>
+                ))}
+              </select>
+              {browsers && !browsers.length && <span className="mt-1 block text-[12px] text-warn">No Chromium browser found (Chrome, Edge, Brave…).</span>}
+            </label>
+          </div>
+        )}
+        <p className="text-[12px] text-muted">Its folders go in ~/.aihub/profiles. You sign in the first time you launch it.</p>
+      </div>
+      <div className="mt-5 flex justify-end gap-2">
+        <Button variant="ghost" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button variant="primary" onClick={run} disabled={busy || !name.trim() || (kind === 'web' && !browser)}>
+          Create
         </Button>
       </div>
     </Dialog>

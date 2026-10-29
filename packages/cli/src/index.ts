@@ -22,7 +22,8 @@ import {
   plural,
   reconcile,
   relabelProfile,
-  removeProfile,
+  deleteProfile,
+  moveToTrash,
   saveHub,
   shellQuote,
   type Finding,
@@ -287,11 +288,22 @@ profile
 profile
   .command('remove <id>')
   .description("Stop tracking a profile (its folder and login are kept)")
+  .option('--unshare', 'first take out what the hub shared into it (`aihub undo` puts it back)')
+  .option('--trash', 'move its folder to the Trash, login and history included (only folders the hub created)')
   .action(
-    action(async (id: string) => {
+    action(async (id: string, opts: { unshare?: boolean; trash?: boolean }) => {
+      if (opts.unshare && opts.trash) throw new Error('Use --unshare or --trash, not both (the Trash takes everything).');
       const hub = await loadHub(ctx);
-      const { root } = await removeProfile(ctx, hub, id);
-      console.log(`Removed ${id} from the hub. Its folder ${contractHome(root, ctx.home)} was not touched.`);
+      const r = await deleteProfile(ctx, hub, id, {
+        unshare: opts.unshare,
+        ...(opts.trash ? { trash: (dir: string) => moveToTrash(ctx, dir) } : {}),
+      });
+      console.log(`Removed ${id} from the hub.`);
+      if (r.trashed) console.log(`Moved ${r.folder} to the Trash.`);
+      else console.log(`Its folder ${r.folder} and login were kept.`);
+      if (r.unshared) console.log(`Took out ${plural(r.unshared, 'shared item')} (\`aihub undo\` puts them back).`);
+      if (r.leftInPlace) console.log(dim(`${plural(r.leftInPlace, 'shared item')} stayed in the folder${opts.unshare ? '' : ' (--unshare takes them out)'}.`));
+      if (r.launcher) console.log(`Removed the launcher ${r.launcher}.`);
     }),
   );
 

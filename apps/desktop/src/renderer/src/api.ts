@@ -17,3 +17,4 @@ export type Matrix = Awaited<ReturnType<Api['matrix']>>;
 export type Plan = Awaited<ReturnType<Api['setShare']>>;
 export type DoctorReport = Awaited<ReturnType<Api['doctor']>>;
 export type Candidate = Awaited<ReturnType<Api['discover']>>[number];
+export type RemovalInfo = Awaited<ReturnType<Api['removalInfo']>>;
