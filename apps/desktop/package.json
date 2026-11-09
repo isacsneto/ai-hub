@@ -1,6 +1,7 @@
 {
   "name": "@aihub/desktop",
   "version": "0.1.6",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "main": "out/main/index.js",

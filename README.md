@@ -133,3 +133,7 @@ scripts/         Phase 0 isolation checks
 ```
 
 Development: `npm test` (vitest, against temporary home folders) and `npm run build`. Set `AIHUB_HOME=/some/dir` to use a hub other than `~/.aihub`. To check the desktop app without a visible window: `AIHUB_SMOKE=/tmp/shots npx electron apps/desktop` saves a screenshot of each page.
+
+## License
+
+[MIT](LICENSE)
