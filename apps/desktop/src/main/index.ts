@@ -32,6 +32,7 @@ import {
   readPlistString,
   reconcile,
   reconcileAll,
+  refreshLaunchers,
   relabelProfile,
   removalInfo,
   removeFromDock,
@@ -580,6 +581,8 @@ app.whenReady().then(() => {
   const login = app.getLoginItemSettings();
   if (!(login.wasOpenedAtLogin || (login.openAtLogin && os.uptime() < 300))) createWindow();
   watchClaudeUpdates();
+  // Launchers made by an older version get the current script (e.g. bringing a running copy forward).
+  void withHubLock(ctx, async () => refreshLaunchers(ctx, await loadHub(ctx))).catch((err) => console.error('refreshing launchers:', err));
   if (app.isPackaged) {
     setTimeout(() => void checkUpdates(), 5000);
     setInterval(() => void checkUpdates(), UPDATE_EVERY_MS);

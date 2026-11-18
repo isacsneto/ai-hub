@@ -78,7 +78,8 @@ export const claudeDesktop: ToolAdapter<ClaudeDesktopProfile> = {
     const app = await findClaudeApp(ctx, p);
     if (!app) throw new Error('Claude.app was not found in /Applications or ~/Applications.');
     const paths = this.paths(ctx, p);
-    const openArgs = paths.isDefault ? ['-a', app] : ['-n', '-a', app];
+    // Always a new copy: openOrFocus brings an already running one forward first.
+    const openArgs = ['-n', '-a', app];
 
     if (p.codeProfile) {
       const code = hub.profiles.find((q) => q.id === p.codeProfile);
@@ -92,7 +93,12 @@ export const claudeDesktop: ToolAdapter<ClaudeDesktopProfile> = {
 
     const appArgs = [...(paths.isDefault ? [] : [`--user-data-dir=${paths.root}`]), ...args];
     if (appArgs.length) openArgs.push('--args', ...appArgs);
-    return { command: '/usr/bin/open', args: openArgs, env: cleanEnv(ctx.env, APP_ENV_STRIP) };
+    return {
+      command: '/usr/bin/open',
+      args: openArgs,
+      env: cleanEnv(ctx.env, APP_ENV_STRIP),
+      instance: { app, ...(paths.isDefault ? {} : { dataDir: paths.root }) },
+    };
   },
 
   async looksLikeRoot(dir) {

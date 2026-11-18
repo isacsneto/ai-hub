@@ -101,14 +101,19 @@ export const cursor: ToolAdapter<CursorProfile> = {
     const app = await findApp(ctx, p);
     if (!app) throw new Error('Cursor.app was not found in /Applications or ~/Applications.');
     const paths = this.paths(ctx, p);
-    const open = paths.isDefault ? ['-a', app] : ['-n', '-a', app];
+    const open = ['-n', '-a', app]; // openOrFocus brings an already running copy forward first
     if (p.homeMode === 'isolated') open.push('--env', `HOME=${cursorHome(ctx, p)}`);
     const appArgs = [
       ...(paths.isDefault ? [] : [`--user-data-dir=${paths.root}`]),
       ...(p.extensionsDir ? [`--extensions-dir=${resolvePath(p.extensionsDir, ctx.home)}`] : []),
       ...args,
     ];
-    return { command: '/usr/bin/open', args: [...open, ...(appArgs.length ? ['--args', ...appArgs] : [])], env: cleanEnv(ctx.env, APP_ENV_STRIP) };
+    return {
+      command: '/usr/bin/open',
+      args: [...open, ...(appArgs.length ? ['--args', ...appArgs] : [])],
+      env: cleanEnv(ctx.env, APP_ENV_STRIP),
+      instance: { app, ...(paths.isDefault ? {} : { dataDir: paths.root }) },
+    };
   },
 
   async looksLikeRoot(dir) {

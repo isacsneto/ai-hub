@@ -4,7 +4,7 @@ import sharp from 'sharp';
 import { describe, expect, it } from 'vitest';
 import type { Hub, Profile } from '../src/config.js';
 import { labelInitial, renderIcon } from '../src/icons.js';
-import { buildLauncher, removeLauncher } from '../src/launchers.js';
+import { buildLauncher, refreshLaunchers, removeLauncher } from '../src/launchers.js';
 import { findProfileFile, shellInit, writeProfileFile } from '../src/shell.js';
 import { ctxFor, executable, fakeSystem, tempHome, write } from './helpers.js';
 
@@ -48,8 +48,10 @@ describe('launchers', () => {
   it('bakes the exact open command for Desktop profiles', async () => {
     const { home, hub, desk, sys } = await setup();
     const app = await buildLauncher(ctxFor(home, sys), hub, desk);
-    expect(await fs.readFile(`${app}/Contents/MacOS/launcher`, 'utf8')).toBe(
-      `#!/bin/bash\nexec /usr/bin/open -n -a ${home}/Apps/Claude.app --env CLAUDE_CONFIG_DIR=${home}/cw --args --user-data-dir=${home}/desk\n`,
+    const script = await fs.readFile(`${app}/Contents/MacOS/launcher`, 'utf8');
+    expect(script).toContain(`-v dir=${home}/desk`);
+    expect(script.trimEnd().split('\n').at(-1)).toBe(
+      `exec /usr/bin/open -n -a ${home}/Apps/Claude.app --env CLAUDE_CONFIG_DIR=${home}/cw --args --user-data-dir=${home}/desk`,
     );
   });
 
@@ -117,5 +119,20 @@ describe('shell integration', () => {
     await writeProfileFile(`${home}/proj`, 'claude-work');
     expect(await findProfileFile(`${home}/proj/src/deep`)).toEqual({ id: 'claude-work', file: `${home}/proj/.aihub-profile` });
     expect(await findProfileFile(home)).toBeUndefined();
+  });
+});
+
+describe('refreshLaunchers', () => {
+  it('rebuilds a launcher with an older script, and creates none that is missing', async () => {
+    const { home, hub, desk, sys } = await setup();
+    const ctx = ctxFor(home, sys);
+    const app = await buildLauncher(ctx, hub, desk);
+    const file = `${app}/Contents/MacOS/launcher`;
+    const fresh = await fs.readFile(file, 'utf8');
+    expect(await refreshLaunchers(ctx, hub)).toEqual([]); // up to date, and cw has none
+    await fs.writeFile(file, '#!/bin/bash\nexec /usr/bin/open -n -a old\n');
+    expect(await refreshLaunchers(ctx, hub)).toEqual([app]);
+    expect(await fs.readFile(file, 'utf8')).toBe(fresh);
+    await expect(fs.access(`${home}/Launchers/Claude Work.app`)).rejects.toThrow();
   });
 });

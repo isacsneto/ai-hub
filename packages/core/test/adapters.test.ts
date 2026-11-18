@@ -122,6 +122,8 @@ describe('claude-desktop', () => {
       id: 'def', tool: 'claude-desktop', label: 'Default',
       dataDir: '~/Library/Application Support/Claude', codeProfile: 'claude-default', app,
     };
-    expect((await claudeDesktop.launchSpec(ctx, hub, p, [])).args).toEqual(['-a', app]);
+    const spec = await claudeDesktop.launchSpec(ctx, hub, p, []);
+    expect(spec.args).toEqual(['-n', '-a', app]); // a running default copy is brought forward first
+    expect(spec.instance).toEqual({ app });
   });
 });

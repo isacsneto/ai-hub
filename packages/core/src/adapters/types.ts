@@ -1,3 +1,4 @@
+import type { AppInstance } from '../app-instance.js';
 import type { Hub, Profile, ToolId } from '../config.js';
 import type { Context, Env } from '../context.js';
 import type { DirEntryInfo } from '../fsx.js';
@@ -57,6 +58,8 @@ export interface LaunchSpec {
   command: string;
   args: string[];
   env: Env;
+  /** App profiles: the running copy to bring forward instead of starting another (see app-instance). */
+  instance?: AppInstance;
 }
 
 /** Where and how a library item lands in a profile. */

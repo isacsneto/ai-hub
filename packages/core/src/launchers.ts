@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { adapterFor } from './adapters/index.js';
+import { openOrFocus, openOrFocusScript } from './app-instance.js';
 import { cleanLabel, preferences, type Hub, type Profile } from './config.js';
 import type { Context } from './context.js';
 import { removeFromDock } from './dock.js';
@@ -76,8 +77,7 @@ async function launcherScript(ctx: Context, hub: Hub, p: Profile): Promise<strin
   // GUI tools: bake the exact `open` command so the launcher works without Node.
   const adapter = adapterFor(p);
   await adapter.prepareLaunch?.(ctx, p);
-  const spec = await adapter.launchSpec(ctx, hub, p, []);
-  return `#!/bin/bash\nexec ${[spec.command, ...spec.args].map(shellQuote).join(' ')}\n`;
+  return openOrFocusScript(await adapter.launchSpec(ctx, hub, p, []));
 }
 
 async function assertOurs(ctx: Context, app: string): Promise<void> {
@@ -111,6 +111,25 @@ export async function buildLauncher(ctx: Context, hub: Hub, p: Profile, opts: { 
   // Ad-hoc signature so Gatekeeper treats it as a local app; harmless if it fails.
   await ctx.sys.run('/usr/bin/codesign', ['--force', '--sign', '-', app]);
   return app;
+}
+
+/**
+ * Rebuild launchers whose script is out of date (made by an older AI-Hub, or the profile changed
+ * since). Launchers that don't exist aren't created. Returns the rebuilt ones.
+ */
+export async function refreshLaunchers(ctx: Context, hub: Hub): Promise<string[]> {
+  const out: string[] = [];
+  for (const p of hub.profiles) {
+    const app = launcherPath(ctx, hub, p);
+    const current = await fs.readFile(path.join(app, 'Contents/MacOS/launcher'), 'utf8').catch(() => undefined);
+    if (current === undefined) continue;
+    try {
+      if (current !== (await launcherScript(ctx, hub, p))) out.push(await buildLauncher(ctx, hub, p));
+    } catch {
+      // Not ours, or the app it opens is missing: left as it is.
+    }
+  }
+  return out;
 }
 
 /**
@@ -153,7 +172,5 @@ export async function launchProfile(ctx: Context, hub: Hub, p: Profile): Promise
     return;
   }
   await adapter.prepareLaunch?.(ctx, p);
-  const spec = await adapter.launchSpec(ctx, hub, p, []);
-  const r = await ctx.sys.run(spec.command, spec.args, { env: spec.env });
-  if (r.code !== 0) throw new Error(`Launch failed: ${r.stderr.trim()}`);
+  await openOrFocus(ctx, await adapter.launchSpec(ctx, hub, p, []));
 }

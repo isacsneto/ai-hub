@@ -16,6 +16,7 @@ export { abandonUnfinishedUndo, undoLast, journalRoot, type UndoResult } from '.
 export { withHubLock } from './lock.js';
 export * from './icons.js';
 export * from './launchers.js';
+export * from './app-instance.js';
 export * from './shell.js';
 export * from './backup.js';
 export * from './matrix.js';

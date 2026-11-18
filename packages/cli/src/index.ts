@@ -19,6 +19,7 @@ import {
   getProfile,
   loadHub,
   newProfileFolder,
+  openOrFocus,
   plural,
   reconcile,
   relabelProfile,
@@ -338,7 +339,9 @@ program
       const adapter = adapterFor(p);
       await adapter.prepareLaunch?.(ctx, p);
       const spec = await adapter.launchSpec(ctx, hub, p, args);
-      process.exitCode = await ctx.sys.runInteractive(spec.command, spec.args, spec.env);
+      // An app profile that's already open comes forward instead of starting a second copy.
+      if (spec.instance && !args.length) await openOrFocus(ctx, spec);
+      else process.exitCode = await ctx.sys.runInteractive(spec.command, spec.args, spec.env);
     }),
   );
 
