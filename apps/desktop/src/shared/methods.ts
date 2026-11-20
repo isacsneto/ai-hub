@@ -18,6 +18,7 @@ export const API_METHODS = [
   'removeFromDock',
   'removeProfile',
   'launch',
+  'copyLaunchCommand',
   'reveal',
   'discover',
   'importProfiles',

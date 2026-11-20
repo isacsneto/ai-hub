@@ -47,6 +47,15 @@ export function ProfilesPage({ notify }: { notify: Notify }) {
     }
   };
 
+  const copyTerminalCommand = async (v: ProfileView) => {
+    try {
+      const command = await api.copyLaunchCommand(v.profile.id);
+      notify(`Copied: ${command}`, 'ok');
+    } catch (e) {
+      notify(errorText(e), 'bad');
+    }
+  };
+
   const toggleDock = async (v: ProfileView) => {
     try {
       if (v.inDock) {
@@ -124,6 +133,11 @@ export function ProfilesPage({ notify }: { notify: Notify }) {
                   <Button variant="primary" onClick={() => launch(v)}>
                     {openLabel(v)}
                   </Button>
+                  {(v.profile.tool === 'claude-code' || v.profile.tool === 'codex') && (
+                    <Button onClick={() => copyTerminalCommand(v)} title="Copies a command that always starts this exact profile">
+                      Copy terminal command
+                    </Button>
+                  )}
                   <Button onClick={() => setEditing(v)}>Edit</Button>
                   <Button
                     variant="ghost"

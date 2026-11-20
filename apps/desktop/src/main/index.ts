@@ -51,7 +51,7 @@ import {
   type Profile,
   type ShareKind,
 } from '@aihub/core';
-import { BrowserWindow, Menu, Notification, Tray, app, dialog, ipcMain, nativeImage, shell } from 'electron';
+import { BrowserWindow, Menu, Notification, Tray, app, clipboard, dialog, ipcMain, nativeImage, shell } from 'electron';
 import { API_METHODS } from '../shared/methods';
 import { checkForUpdate, downloadAndInstall, installTarget, type Release, type UpdateStatus } from './updater';
 
@@ -282,6 +282,17 @@ const api = {
     await launchProfile(ctx, hub, getProfile(hub, id));
   },
 
+  /** Copy a profile-qualified command, so a pasted terminal launch can't fall back to another account. */
+  async copyLaunchCommand(id: string) {
+    const p = getProfile(await loadHub(ctx), id);
+    if (p.tool !== 'claude-code' && p.tool !== 'codex') {
+      throw new Error('Only terminal profiles have a terminal session command.');
+    }
+    const command = `aihub run ${p.id}`;
+    clipboard.writeText(command);
+    return command;
+  },
+
   async reveal(id: string) {
     const p = getProfile(await loadHub(ctx), id);
     const err = await shell.openPath(adapterFor(p).paths(ctx, p).root);
@@ -405,11 +416,12 @@ const notifyUser = (title: string, body: string) => {
   if (Notification.isSupported()) new Notification({ title, body }).show();
 };
 
-/** Puts a Claude Desktop profile back when an update restarts it as the default account (see relaunch-watch). */
-function watchClaudeUpdates() {
+/** Puts a desktop AI profile back when an update restarts it as the default account (see relaunch-watch). */
+function watchDesktopUpdates() {
   const watcher = new UpdateRelaunchWatcher({
     now: Date.now,
-    processes: () => listProcesses(ctx),
+    // CODEX_HOME is an environment variable, so include environments to recognise a Codex app copy.
+    processes: () => listProcesses(ctx, { env: true }),
     appVersion: (a) => appVersion(ctx, a),
     reopen: async (p) => launchProfile(ctx, await loadHub(ctx), p),
     terminate: (pid) => {
@@ -421,7 +433,8 @@ function watchClaudeUpdates() {
     },
     report: (e) => {
       if (e.type === 'reopened') {
-        notifyUser('Claude updated', `Reopened ${e.profile.label}${e.closedDefault ? ' and closed the default window the update opened' : ''}.`);
+        const name = e.profile.tool === 'codex-desktop' ? 'Codex updated' : 'Claude updated';
+        notifyUser(name, `Reopened ${e.profile.label}${e.closedDefault ? ' and closed the default window the update opened' : ''}.`);
       } else if (e.type === 'reopen-failed') {
         notifyUser(`Could not reopen ${e.profile.label}`, e.message);
       }
@@ -580,7 +593,7 @@ app.whenReady().then(() => {
   // the Mac starting up, with Open at Login on, counts too.
   const login = app.getLoginItemSettings();
   if (!(login.wasOpenedAtLogin || (login.openAtLogin && os.uptime() < 300))) createWindow();
-  watchClaudeUpdates();
+  watchDesktopUpdates();
   // Launchers made by an older version get the current script (e.g. bringing a running copy forward).
   void withHubLock(ctx, async () => refreshLaunchers(ctx, await loadHub(ctx))).catch((err) => console.error('refreshing launchers:', err));
   if (app.isPackaged) {

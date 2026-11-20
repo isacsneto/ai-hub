@@ -1,34 +1,37 @@
 import path from 'node:path';
 import { claudeDesktop } from './adapters/claude-desktop.js';
-import { preferences, type ClaudeDesktopProfile, type Hub } from './config.js';
+import { codexDesktop } from './adapters/codex-desktop.js';
+import { preferences, type ClaudeDesktopProfile, type CodexDesktopProfile, type Hub } from './config.js';
 import type { Context } from './context.js';
 import { resolvePath } from './paths.js';
 import { readPlistString } from './plist.js';
 
 /**
- * Claude Desktop updates itself and restarts. Some versions restart without the --user-data-dir
- * (and CLAUDE_CONFIG_DIR) the profile was opened with, so the window that comes back is the default
- * account. The watcher notices that and puts it right: reopen the profile, close the default
- * window the update opened. When Claude comes back in the right folder by itself, it does nothing.
+ * Desktop AI apps can restart during an update without the profile folder they were opened with.
+ * That puts the user into the default account. The watcher notices that and puts it right: reopen
+ * the profile, close the default window the update opened. When an app comes back in the right
+ * folder by itself, it does nothing.
  */
 
+export type WatchedDesktopProfile = ClaudeDesktopProfile | CodexDesktopProfile;
+
 export interface WatchTarget {
-  profile: ClaudeDesktopProfile;
-  /** The Claude.app this profile runs. */
+  profile: WatchedDesktopProfile;
+  /** The desktop app this profile runs. */
   app: string;
-  /** Its --user-data-dir. */
+  /** Its --user-data-dir (Claude) or CODEX_HOME (Codex). */
   root: string;
 }
 
 export type WatchEvent =
-  | { type: 'reopened'; profile: ClaudeDesktopProfile; closedDefault: boolean }
-  | { type: 'reopen-failed'; profile: ClaudeDesktopProfile; message: string };
+  | { type: 'reopened'; profile: WatchedDesktopProfile; closedDefault: boolean }
+  | { type: 'reopen-failed'; profile: WatchedDesktopProfile; message: string };
 
 export interface WatchDeps {
   now(): number;
   processes(): Promise<{ pid: number; args: string }[]>;
   appVersion(app: string): Promise<string | undefined>;
-  reopen(profile: ClaudeDesktopProfile): Promise<void>;
+  reopen(profile: WatchedDesktopProfile): Promise<void>;
   terminate(pid: number): void;
   report(event: WatchEvent): void;
 }
@@ -51,6 +54,14 @@ const hasArg = (args: string, arg: string) => {
   }
   return false;
 };
+
+/** Whether a process owns this profile's folder. Environment variables from `ps e` are space separated too. */
+const ownsTarget = (args: string, t: WatchTarget) =>
+  t.profile.tool === 'claude-desktop' ? hasArg(args, `--user-data-dir=${t.root}`) : hasArg(args, `CODEX_HOME=${t.root}`);
+
+/** A default account process has neither app's profile selector. */
+const isDefaultProcess = (args: string, tool: WatchedDesktopProfile['tool']) =>
+  tool === 'claude-desktop' ? !args.includes(' --user-data-dir=') : !args.includes(' CODEX_HOME=');
 
 /**
  * The decision, in short: a profile counts as wrongly relaunched only when (1) its window quit close
@@ -99,11 +110,16 @@ export class UpdateRelaunchWatcher {
 
     const procs = await this.deps.processes();
     const mainsOf = (app: string) => procs.filter((p) => p.args.startsWith(`${app}/Contents/MacOS/`));
-    const defaultsOf = (app: string) => mainsOf(app).filter((p) => !p.args.includes(' --user-data-dir=')).map((p) => p.pid);
+    const defaultsOf = (app: string) => {
+      const tools = new Set(targets.filter((t) => t.app === app).map((t) => t.profile.tool));
+      return mainsOf(app)
+        .filter((p) => [...tools].some((tool) => isDefaultProcess(p.args, tool)))
+        .map((p) => p.pid);
+    };
     // ps joins arguments with spaces, so "/x/My" also matches "/x/My Work": the longest folder wins.
     const ownerOf = (args: string, app: string) =>
       targets
-        .filter((t) => t.app === app && hasArg(args, `--user-data-dir=${t.root}`))
+        .filter((t) => t.app === app && ownsTarget(args, t))
         .sort((a, b) => b.root.length - a.root.length)[0];
     const instanceOf = (t: WatchTarget) => mainsOf(t.app).find((p) => ownerOf(p.args, t.app) === t);
 
@@ -160,17 +176,23 @@ export class UpdateRelaunchWatcher {
   }
 }
 
-/** Claude Desktop profiles with their own folder, unless `preferences.reopenAfterUpdate` is off. */
+/** Desktop AI profiles with their own folder, unless `preferences.reopenAfterUpdate` is off. */
 export async function watchTargets(ctx: Context, hub: Hub): Promise<WatchTarget[]> {
   if (preferences(hub).reopenAfterUpdate === false) return [];
   const out: WatchTarget[] = [];
   for (const p of hub.profiles) {
-    if (p.tool !== 'claude-desktop') continue;
-    const paths = claudeDesktop.paths(ctx, p);
-    if (paths.isDefault) continue;
-    // Mid-update the bundle can be missing for a moment: keep watching where it was.
-    const app = (await claudeDesktop.findBinary(ctx, p)) ?? (p.app ? resolvePath(p.app, ctx.home) : '/Applications/Claude.app');
-    out.push({ profile: p, app, root: paths.root });
+    if (p.tool === 'claude-desktop') {
+      const paths = claudeDesktop.paths(ctx, p);
+      if (paths.isDefault) continue;
+      // Mid-update the bundle can be missing for a moment: keep watching where it was.
+      const app = (await claudeDesktop.findBinary(ctx, p)) ?? (p.app ? resolvePath(p.app, ctx.home) : '/Applications/Claude.app');
+      out.push({ profile: p, app, root: paths.root });
+    } else if (p.tool === 'codex-desktop') {
+      const paths = codexDesktop.paths(ctx, p);
+      if (paths.isDefault) continue;
+      const app = (await codexDesktop.findBinary(ctx, p)) ?? (p.app ? resolvePath(p.app, ctx.home) : '/Applications/ChatGPT.app');
+      out.push({ profile: p, app, root: paths.root });
+    }
   }
   return out;
 }

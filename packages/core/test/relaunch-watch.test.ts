@@ -1,14 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import type { ClaudeDesktopProfile } from '../src/config.js';
+import type { ClaudeDesktopProfile, CodexDesktopProfile } from '../src/config.js';
 import { SETTLE_MS, UpdateRelaunchWatcher, type WatchEvent, type WatchTarget } from '../src/relaunch-watch.js';
 
 const APP = '/Applications/Claude.app';
 const BIN = `${APP}/Contents/MacOS/Claude`;
+const CODEX_APP = '/Applications/ChatGPT.app';
+const CODEX_BIN = `${CODEX_APP}/Contents/MacOS/ChatGPT`;
 const desk = (id: string, dataDir: string): ClaudeDesktopProfile => ({ id, tool: 'claude-desktop', label: id, dataDir });
 const work = desk('desk-work', '/u/.aihub/profiles/desk-work');
 const target = (p: ClaudeDesktopProfile): WatchTarget => ({ profile: p, app: APP, root: p.dataDir });
+const codex = (id: string, codexHome: string): CodexDesktopProfile => ({ id, tool: 'codex-desktop', label: id, codexHome });
+const codexWork = codex('codex-work', '/u/.aihub/profiles/codex-work');
+const codexTarget = (p: CodexDesktopProfile): WatchTarget => ({ profile: p, app: CODEX_APP, root: p.codexHome });
 const profileProc = (pid: number, p = work) => ({ pid, args: `${BIN} --user-data-dir=${p.dataDir}` });
 const defaultProc = (pid: number) => ({ pid, args: BIN });
+const codexProfileProc = (pid: number, p = codexWork) => ({ pid, args: `${CODEX_BIN} CODEX_HOME=${p.codexHome}` });
+const codexDefaultProc = (pid: number) => ({ pid, args: CODEX_BIN });
 const helper = (pid: number) => ({ pid, args: `${APP}/Contents/Frameworks/Claude Helper.app/Contents/MacOS/Claude Helper --type=gpu-process --user-data-dir=${work.dataDir}` });
 const SETTLE_TICKS = Math.ceil(SETTLE_MS / 3000) + 1;
 
@@ -213,5 +220,20 @@ describe('reopening a Claude profile after an update', () => {
     await ticks(SETTLE_TICKS + 5);
     expect(tries).toBe(1);
     expect(w.events).toEqual([expect.objectContaining({ type: 'reopen-failed', message: 'Claude.app was not found' })]);
+  });
+});
+
+describe('reopening a Codex profile after an update', () => {
+  it('uses CODEX_HOME to restore the same account after ChatGPT/Codex relaunches as default', async () => {
+    const { w, tick, ticks } = world([codexTarget(codexWork)]);
+    w.procs = [codexProfileProc(10)];
+    await ticks(2);
+    w.procs = [codexDefaultProc(20)];
+    w.version = '2.0';
+    await tick();
+    await ticks(SETTLE_TICKS);
+    expect(w.reopened).toEqual(['codex-work']);
+    expect(w.terminated).toEqual([20]);
+    expect(w.events[0]).toMatchObject({ type: 'reopened', profile: { tool: 'codex-desktop' }, closedDefault: true });
   });
 });
